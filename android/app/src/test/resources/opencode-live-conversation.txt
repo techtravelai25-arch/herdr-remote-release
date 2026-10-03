@@ -1,0 +1,277 @@
+
+  ┃                                                                                                                                             Repo improvement suggestions
+  ┃  how can we improve this repo
+  ┃                                                                                                                                             Context
+                                                                                                                                                23,588 tokens
+     Thought · 156ms                                                                                                                            2% used
+                                                                                                                                                $0.00 spent
+     Thought · 156ms
+                                                                                                                                                Repo improvement suggestions
+     Digging into your repo to surface concrete improvements.
+     → Read .                                                                                                                                   23,588 tokens
+     Thought · 47ms                                                                                                                             $0.00 spent
+
+     → Read README.md                                                                                                                           LSP
+     → Read pyproject.toml                                                                                                                      LSPs are disabled
+     → Read PRODUCT.md
+     → Read pyproject.toml
+     → Read PRODUCT.md                                                                                                                          Repo improvement suggestions
+     → Read Makefile
+     Thought · 136ms                                                                                                                            23,588 tokens
+     → Read .github                                                                                                                             $0.00 spent
+     ✱ Glob "accsim/**/*.py" (58 matches)
+     → Read CONTRIBUTING.md                                                                                                                     LSP
+     → Read CHANGELOG.md                                                                                                                        LSPs are disabled
+
+     → Read CHANGELOG.md
+                                                                                                                                                Repo improvement suggestions
+     Thought · 3ms
+                                                                                                                                                Context
+     I've got the broad layout — now checking tests, CI, and docs for friction points.                                                          23,588 tokens
+                                                                                                                                                2% used
+     ✱ Glob ".github/workflows/*.yml"                                                                                                           $0.00 spent
+     ✱ Glob "tests/test*.py" (42 matches)
+     → Read docs                                                                                                                                LSP
+                                                                                                                                                LSPs are disabled
+
+  ┃  $ ls -R docs | head -n 100; echo "---"; ls tests | head -n 50; echo "---"; wc -l accsim/cli.py accsim/config/*.py 2>/dev/null; echo "--
+  ┃  -"; git log --oneline -15                                                                                                                  Context
+  ┃                                                                                                                                             23,588 tokens
+  ┃  docs:                                                                                                                                      2% used
+  ┃  architecture                                                                                                                               $0.00 spent
+  ┃  product
+  ┃  README.md                                                                                                                                  LSP
+  ┃  validation.md                                                                                                                              LSPs are disabled
+  ┃
+  ┃  validation.md
+  ┃                                                                                                                                             Repo improvement suggestions
+  ┃  docs/architecture:
+  ┃  co-sim.md                                                                                                                                  Context
+  ┃  overview.md                                                                                                                                23,588 tokens
+  ┃  README.md                                                                                                                                  2% used
+  ┃  …                                                                                                                                          $0.00 spent
+  ┃  Click to expand                                                                                                                            LSP
+  ┃                                                                                                                                             LSPs are disabled
+
+  ┃
+                                                                                                                                                Repo improvement suggestions
+     Thought · 336ms
+                                                                                                                                                Context
+  ┃                                                                                                                                             23,588 tokens
+  ┃  $ ls -la .github/workflows/ 2>&1; echo "==="; cat .github/workflows/* 2>&1 | head -n 120; echo "==="; cat .gitignore; echo "==="; ls *.    2% used
+  ┃  md *.html; echo "==="; du -sh documentation/ docs/ accsim/ tests/ 2>/dev/null; echo "==="; git status --short | head -n 20                 $0.00 spent
+  ┃
+  ┃  total 12                                                                                                                                   LSP
+  ┃  drwxrwxr-x 2 developer developer 4096 Sep 21 14:15 .                                                                                           LSPs are disabled
+  ┃  drwxrwxr-x 3 developer developer 4096 Sep 21 14:15 ..
+  ┃  drwxrwxr-x 2 developer developer 4096 Sep 21 14:15 .
+  ┃  drwxrwxr-x 3 developer developer 4096 Sep 21 14:15 ..                                                                                          Repo improvement suggestions
+  ┃  -rw-rw-r-- 1 developer developer 1562 Sep 21 14:15 ci.yml
+  ┃  ===                                                                                                                                        Context
+  ┃  name: Host validation                                                                                                                      23,588 tokens
+  ┃                                                                                                                                             2% used
+  ┃  on:                                                                                                                                        $0.00 spent
+  ┃    push:
+  ┃    pull_request:                                                                                                                            LSP
+  ┃  …                                                                                                                                          LSPs are disabled
+  ┃
+  ┃  …
+  ┃                                                                                                                                             Repo improvement suggestions
+  ┃  Click to expand
+  ┃                                                                                                                                             Context
+                                                                                                                                                23,588 tokens
+     Thought · 146ms                                                                                                                            2% used
+                                                                                                                                                $0.00 spent
+  ┃
+  ┃  $ echo "== largest py =="; find accsim accsim_engine_sdk tests -name "*.py" -exec wc -l {} + | sort -n | tail -n 15; echo "== docs dup     LSP
+  ┃  =="; ls documentation/; wc -l DOCUMENTATION.md documentation.html 2>/dev/null; echo "== ruff =="; ruff check 2>&1 | tail -n 5; echo        LSPs are disabled
+  ┃  "== pytest quick =="; timeout 120 python -m pytest -q -x --co 2>&1 | tail -n 5
+  ┃  =="; ls documentation/; wc -l DOCUMENTATION.md documentation.html 2>/dev/null; echo "== ruff =="; ruff check 2>&1 | tail -n 5; echo
+  ┃  "== pytest quick =="; timeout 120 python -m pytest -q -x --co 2>&1 | tail -n 5                                                             Repo improvement suggestions
+  ┃
+  ┃  == largest py ==                                                                                                                           Context
+  ┃     258 accsim/orchestrate/runs.py                                                                                                          23,588 tokens
+  ┃     259 accsim/importers/probe_sensors.py                                                                                                   2% used
+  ┃     260 tests/test_mesh_robot_import.py                                                                                                     $0.00 spent
+  ┃     325 tests/test_ui_api.py
+  ┃     327 accsim/importers/pipeline.py                                                                                                        LSP
+  ┃     391 accsim/harness/runner.py                                                                                                            LSPs are disabled
+  ┃     448 accsim/config/loader.py
+  ┃     391 accsim/harness/runner.py
+  ┃     448 accsim/config/loader.py                                                                                                             Repo improvement suggestions
+  ┃     588 accsim/cli.py
+  ┃     620 accsim/master/ros2bridge.py                                                                                                         Context
+  ┃  …                                                                                                                                          23,588 tokens
+  ┃  Click to expand                                                                                                                            $0.00 spent
+  ┃
+                                                                                                                                                LSP
+     Thought · 4ms                                                                                                                              LSPs are disabled
+
+     Thought · 4ms
+                                                                                                                                                Repo improvement suggestions
+  ┃
+  ┃  $ which python3 && python3 -m pytest --co -q 2>&1 | tail -n 5; echo "==="; python3 -m ruff check 2>&1 | tail -n 5 || pip list 2>&1 |       Context
+  ┃  head -n 20                                                                                                                                 23,588 tokens
+  ┃  /usr/bin/python3                                                                                                                           $0.00 spent
+  ┃  ERROR tests/test_ui_api.py - RuntimeError: Form data requires "python-multipa...
+  ┃  ERROR tests/test_ui_request_protection.py - RuntimeError: Form data requires ...                                                           LSP
+  ┃  ERROR tests/test_urdf_preflight.py                                                                                                         LSPs are disabled
+  ┃  !!!!!!!!!!!!!!!!!!! Interrupted: 14 errors during collection !!!!!!!!!!!!!!!!!!!
+  ┃  ERROR tests/test_urdf_preflight.py
+  ┃  !!!!!!!!!!!!!!!!!!! Interrupted: 14 errors during collection !!!!!!!!!!!!!!!!!!!                                                           Repo improvement suggestions
+  ┃  231/237 tests collected (6 deselected), 14 errors in 1.31s
+  ┃  ===                                                                                                                                        Context
+  ┃  /usr/bin/python3: No module named ruff                                                                                                     23,588 tokens
+  ┃                                                                                                                                             2% used
+                                                                                                                                                $0.00 spent
+     Thought · 299ms
+                                                                                                                                                LSP
+  ┃                                                                                                                                             LSPs are disabled
+  ┃  $ python3 -m pytest --co -q 2>&1 | grep -E "^ERROR|ModuleNotFound|ImportError|requires" | sort -u | head -n 20
+  ┃
+  ┃  $ python3 -m pytest --co -q 2>&1 | grep -E "^ERROR|ModuleNotFound|ImportError|requires" | sort -u | head -n 20                             Repo improvement suggestions
+  ┃
+  ┃  E   ModuleNotFoundError: No module named 'zmq'                                                                                             Context
+  ┃  ERROR tests/test_air_product.py                                                                                                            23,588 tokens
+  ┃  ERROR tests/test_controller_sdk.py                                                                                                         2% used
+  ┃  ERROR tests/test_core_contracts.py                                                                                                         $0.00 spent
+  ┃  ERROR tests/test_engine_sdk.py
+  ┃  ERROR tests/test_harness_guards.py                                                                                                         LSP
+  ┃  ERROR tests/test_mesh_robot_import.py                                                                                                      LSPs are disabled
+  ┃  ERROR tests/test_px4_engine.py
+  ┃  ERROR tests/test_mesh_robot_import.py
+  ┃  ERROR tests/test_px4_engine.py                                                                                                             Repo improvement suggestions
+  ┃  ERROR tests/test_run_container_cleanup.py
+  ┃  ERROR tests/test_runtime_input_regressions.py                                                                                              Context
+  ┃  …                                                                                                                                          23,588 tokens
+  ┃                                                                                                                                             2% used
+  ┃  Click to expand                                                                                                                            $0.00 spent
+                                                                                                                                                LSP
+     Thought · 7.3s                                                                                                                             LSPs are disabled
+
+     Thought · 7.3s
+                                                                                                                                                Repo improvement suggestions
+     Found missing test dependencies and several structural issues — doing one last check for project hygiene files.
+                                                                                                                                                Context
+  ┃                                                                                                                                             23,588 tokens
+  ┃  $ ls -a | head -n 40; echo "==="; ls *.lock requirements* .pre-commit* 2>&1; echo "==="; ls LICENSE* LICENCE* 2>&1; echo "==="; git        2% used
+  ┃  status --short | wc -l; git diff --stat HEAD | tail -n 5                                                                                   $0.00 spent
+  ┃
+  ┃  .                                                                                                                                          LSP
+  ┃  ..                                                                                                                                         LSPs are disabled
+  ┃  accsim
+  ┃  ..
+  ┃  accsim                                                                                                                                     Repo improvement suggestions
+  ┃  accsim.egg-info
+  ┃  accsim_engine_sdk                                                                                                                          Context
+  ┃  build                                                                                                                                      23,588 tokens
+  ┃  CHANGELOG.md                                                                                                                               2% used
+  ┃  CONTRIBUTING.md                                                                                                                            $0.00 spent
+  ┃  .coverage
+  ┃  docker                                                                                                                                     LSP
+  ┃  …                                                                                                                                          LSPs are disabled
+  ┃
+  ┃  …
+  ┃                                                                                                                                             Repo improvement suggestions
+  ┃  Click to expand
+  ┃                                                                                                                                             Context
+                                                                                                                                                23,588 tokens
+     Thought · 916ms                                                                                                                            2% used
+                                                                                                                                                $0.00 spent
+     This repo is in good shape functionally (CI + lint + typecheck + coverage gate + packaging guards), but there's clear low-hanging
+     fruit. Prioritized by impact:                                                                                                              LSP
+     1. Land or revert the in-flight rename
+
+     - git status shows ~640 uncommitted changes, crisim/* deleted, net -134k lines. Nothing else matters until this is committed or
+       stashed — review, bisect, and CI are all unreliable right now.
+     - After that: delete checked-in artifacts (build/, accsim.egg-info/, .coverage/, documentation.html). They belong in CI artifacts /
+       releases, not git.
+
+     2. Close the self-admitted quality gaps (CONTRIBUTING.md:76-87)
+
+
+     1. Land or revert the in-flight rename                                                                                                     Repo improvement suggestions
+
+     - git status shows ~640 uncommitted changes, crisim/* deleted, net -134k lines. Nothing else matters until this is committed or            Context
+       stashed — review, bisect, and CI are all unreliable right now.                                                                           23,588 tokens
+     - After that: delete checked-in artifacts (build/, accsim.egg-info/, .coverage/, documentation.html). They belong in CI artifacts /        2% used
+       releases, not git.                                                                                                                       $0.00 spent
+
+     2. Close the self-admitted quality gaps (CONTRIBUTING.md:76-87)                                                                            LSP
+                                                                                                                                                LSPs are disabled
+     - ruff format never bulk-applied + E501 ignored (117 long lines). Do the one-time ruff format pass, then enforce make fmt-check in CI.
+
+     - ruff format never bulk-applied + E501 ignored (117 long lines). Do the one-time ruff format pass, then enforce make fmt-check in CI.     Repo improvement suggestions
+     - mypy only gates MYPY_TARGETS (public surface). Expand incrementally — accsim/master/runner.py (1608 lines), config/schema.py (1509),
+       master/sensors.py (942) are the highest-risk untyped modules.                                                                            Context
+     - Coverage floor is 40% (pyproject.toml:66). Ratchet it as you add host-runnable tests for master/ + engines/.                             23,588 tokens
+     - Ruff only enables E,F,W with E501/E741/E702 ignored. Add I (isort), UP (py310 target), B, N at minimum.                                  2% used
+                                                                                                                                                $0.00 spent
+     3. Fix local dev friction
+                                                                                                                                                LSP
+     - 14/43 test modules fail to collect without extras (No module named 'zmq', python-multipart missing). CI installs .[ui,video,dev],        LSPs are disabled
+       but a bare checkout is broken. Either make those imports lazy/skip-guarded or document make install as mandatory (README install
+     - 14/43 test modules fail to collect without extras (No module named 'zmq', python-multipart missing). CI installs .[ui,video,dev],
+       but a bare checkout is broken. Either make those imports lazy/skip-guarded or document make install as mandatory (README install         Repo improvement suggestions
+       line does, but pytest alone misleads).
+     - No lockfile, no .pre-commit-config.yaml (despite pre-commit in dev extras). Add one running ruff check + ruff format --check so the      Context
+       format drift in (2) stops recurring.                                                                                                     23,588 tokens
+     4. Docs sprawl                                                                                                                             $0.00 spent
+
+     - 6 overlapping entry points: README.md, PRODUCT.md, DOCUMENTATION.md, documentation.html (checked-in generated file), docs/product/       LSP
+       README.md, docs/architecture/README.md, plus documentation/build.py. Pick one: source in docs/, generate documentation.html in CI/       LSPs are disabled
+       release only.
+       README.md, docs/architecture/README.md, plus documentation/build.py. Pick one: source in docs/, generate documentation.html in CI/
+       release only.                                                                                                                            Repo improvement suggestions
+     - docs/ alone is 416KB across ~25 files — add a single docs/README.md decision tree ("I want to X → read Y").
+                                                                                                                                                Context
+     5. Missing project hygiene                                                                                                                 23,588 tokens
+                                                                                                                                                2% used
+     - No LICENSE* file despite vendored robot LICENSE* files and a license-verification feature (accsim/license.py, cryptography dep). Add     $0.00 spent
+       top-level license + SECURITY.md (you ship auth in ui/auth.py).
+     - No issue/PR templates, no CODEOWNERS. Cheap to add, high value with the rename churn.                                                    LSP
+     - CI is a single host job (lint+typecheck+test+build). Split into parallel jobs, add fmt-check, docs build check (documentation/check.     LSPs are disabled
+       py), and a scheduled pip install freshness / pip-audit run.
+
+     6. Architecture
+
+     - Split the god modules: master/runner.py, config/schema.py, master/sensors.py, master/ros2bridge.py (620), ui/api.py (626). cli.py (
+       588) is also ripe for click/typer subcommand modules.
+     - Finish the print() → logging migration in container-side code; the [accsim- prefix echo-filter contract is fragile.
+
+     Want me to start on one? I'd suggest: (a) .pre-commit-config.yaml + CI fmt-check, or (b) a docs-entrypoint cleanup plan.
+
+     ▣  Build · Muse Spark 1.3 Free · 1m 15s
+
+  ┃
+  ┃  tell me in bullet points
+  ┃
+
+     Thought · 73ms
+
+     - Land the rename: ~640 uncommitted files, crisim/ → accsim/, -134k lines — commit or revert first, everything else is unreliable
+       until then
+     - Stop checking in artifacts: build/, accsim.egg-info/, .coverage/, documentation.html belong in CI/release, not git
+     - Enforce formatting: run one-time ruff format, then add make fmt-check to CI; fix 117 ignored E501 long lines
+     - Widen lint: only E,F,W enabled — add I, UP, B, N at minimum
+     - Expand typing: mypy gates public surface only — annotate master/runner.py (1608 lines), config/schema.py (1509), master/sensors.py (
+       942) first
+     - Raise coverage: floor is 40% — ratchet up as master/ + engines/ get host-runnable tests
+     - Fix bare-checkout tests: 14/43 modules fail collection without extras (zmq, python-multipart) — lazy-import or skip-guard
+     - Add lockfile + pre-commit config: pre-commit is in dev deps but no config exists
+     - Deduplicate docs: 6 entry points (README, PRODUCT, DOCUMENTATION, documentation.html, docs/product/README, docs/architecture/README)
+       — source in docs/, generate HTML in CI only
+     - Add doc index: single decision tree ("I want X → read Y") for the 416KB docs/ tree
+     - Add missing hygiene: no top-level LICENSE, no SECURITY.md, no issue/PR templates, no CODEOWNERS
+     - Split CI job: single host job does lint+typecheck+test+build — parallelize, add docs check + pip-audit
+     - Split god modules: runner.py, schema.py, sensors.py, ros2bridge.py, ui/api.py, cli.py all 500+ lines
+     - Finish logging migration: container-side print() + [accsim- echo-filter is fragile — move to logging
+
+     ▣  Build · Muse Spark 1.3 Free · 2m 16s
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · Muse Spark 1.3 Free OpenCode Zen                                                                                                   ~/prat/acc-sim:main
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/developer/workspace/example                                                                                    23.6K (2%)  ctrl+p commands    • OpenCode 1.18.31

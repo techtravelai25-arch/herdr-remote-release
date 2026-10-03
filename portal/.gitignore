@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+.dev.vars
+worker-configuration.d.ts
+release-assets/
+.release-assets-*/
+.publish-cloud.lock

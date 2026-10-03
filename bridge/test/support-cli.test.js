@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {Store} from '../src/store.js';
+
+test('account access CLI persists a named owner grant without enabling disabled remote access', t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-account-cli-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const configPath=path.join(root,'config.json');
+  fs.writeFileSync(configPath,JSON.stringify({socketPath:'/unused',stateDir:'state',projects:[]}));
+  const store=new Store(path.join(root,'state'));
+  store.write('access.json',{enabled:false,devices:{paired:'observer'}});
+  const cli=fileURLToPath(new URL('../src/cli.js',import.meta.url));
+  const run=(email,mode)=>spawnSync(process.execPath,[cli,'access','account',email,mode],{env:{...process.env,HERDR_REMOTE_CONFIG:configPath},encoding:'utf8'});
+  const result=run('OWNER@example.com','normal');
+  assert.equal(result.status,0,result.stderr);
+  assert.deepEqual(store.read('access.json'),{enabled:false,devices:{paired:'observer'},accounts:{'owner@example.com':'normal'}});
+  const before=fs.readFileSync(path.join(root,'state','access.json'),'utf8');
+  assert.notEqual(run('not-an-email','normal').status,0);
+  assert.equal(fs.readFileSync(path.join(root,'state','access.json'),'utf8'),before);
+  assert.equal(run('owner@example.com','observer').status,0);
+  assert.equal(store.read('access.json').accounts['owner@example.com'],'observer');
+});
+
+test('support CLI emits only safe diagnostic fields from private config and state', t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-support-cli-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const privateValues={token:'private-control-token-123',hostname:'private-hostname',projectPath:path.join(root,'secret-project'),deviceName:'private-device-name',owner:'private-session-owner',email:'private-owner@example.com'};
+  fs.mkdirSync(privateValues.projectPath);
+  const configPath=path.join(root,'config.json');
+  fs.writeFileSync(configPath,JSON.stringify({socketPath:path.join(root,'private-herdr.sock'),stateDir:'state',projects:[{id:'secret-project',label:privateValues.hostname,path:privateValues.projectPath}],sessionOwnership:{kind:privateValues.owner,unit:'private.service'},allowTerminalInput:true,allowHerdrStart:true}));
+  const store=new Store(path.join(root,'state'));
+  store.write('devices.json',[{deviceId:'device-1',deviceName:privateValues.deviceName,hash:privateValues.token,createdAt:'2026-01-01T00:00:00Z'}]);
+  store.write('access.json',{enabled:false,devices:{'device-1':'observer'},accounts:{[privateValues.email]:'normal'}});
+  store.write('bridge-status.json',{ready:false,pid:process.pid,hostname:privateValues.hostname,port:8787});
+  const cli=fileURLToPath(new URL('../src/cli.js',import.meta.url));
+  const result=spawnSync(process.execPath,[cli,'support'],{env:{...process.env,HERDR_REMOTE_CONFIG:configPath},encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);
+  const report=JSON.parse(result.stdout);
+  assert.deepEqual(Object.keys(report).sort(),['schemaVersion','generatedAt','bridgeVersion','localReady','relayConnected','sessionOwnership','remoteEnabled','pairedDeviceCount','deviceModes','terminalInputAllowedByConfig','herdrStartAllowedByConfig'].sort());
+  assert.deepEqual(report.deviceModes,{observer:1,normal:0,terminal:0});
+  assert.equal(report.sessionOwnership,'unknown');
+  assert.equal(report.remoteEnabled,false);
+  assert.equal(report.pairedDeviceCount,1);
+  assert.equal(report.terminalInputAllowedByConfig,true);
+  assert.equal(report.herdrStartAllowedByConfig,true);
+  assert.ok(!Number.isNaN(Date.parse(report.generatedAt)));
+  for(const value of Object.values(privateValues))assert.equal(result.stdout.includes(value),false,`leaked ${value}`);
+  assert.equal(result.stdout.includes('device-1'),false);
+});

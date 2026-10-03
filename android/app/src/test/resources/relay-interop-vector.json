@@ -1,0 +1,25 @@
+{
+  "laptopId": "laptop-interop",
+  "id": "ddbc3a35-ed19-4c23-8d44-e7b0b1a975ac",
+  "laptopPrivatePkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgtodrnR2Zp_imc9WlR2i-cDTlxxYVU2FS366fiRLsH3ChRANCAAQAoC23A53_CuTccLcbpeyDPN9DWKZlB3oUZvBEvLZao2q2Hy8EUJqWCu1cvpHulhom8pB-c36_6cI0bnm27bbi",
+  "laptopPublicSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAKAttwOd_wrk3HC3G6XsgzzfQ1imZQd6FGbwRLy2WqNqth8vBFCalgrtXL6R7pYaJvKQfnN-v-nCNG55tu224g",
+  "phonePrivatePkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgEzrDobTtFo9YhkcGEcqvaCcjwBiBD647kxAPuTlSEHShRANCAATmsmlI90kKQLxuW4jmIi_3P5R0HjNktct7t4LNrlt4s6E7PnKmieDQZtG_ZCnu7IyA83hSDfDnkVc2ZUqlIT_I",
+  "phonePublicSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5rJpSPdJCkC8bluI5iIv9z-UdB4zZLXLe7eCza5beLOhOz5ypong0GbRv2Qp7uyMgPN4Ug3w55FXNmVKpSE_yA",
+  "key": "GhjCxIHq9-li676XZ7hPvaPLCO-Wq8j-8gcc272pIsM",
+  "plaintext": {
+    "method": "POST",
+    "path": "/v1/pair",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": "eyJjb2RlIjoiMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIiLCJkZXZpY2VOYW1lIjoiQW5kcm9pZCJ9",
+    "timestamp": 1789990000000
+  },
+  "envelope": {
+    "v": 1,
+    "id": "ddbc3a35-ed19-4c23-8d44-e7b0b1a975ac",
+    "iv": "mBPaVELDkbAAKsbE",
+    "data": "U1vqKKqPUoJQ1zMdhO9dn8L6GDCGLnKSnnBiSctgnJ3TeVdqwW2Yp0G14B8XNdagGsEOsfU2dNQA48TzrGbkypNHWtYdshEOMuBFF3aoU3quuxFm6juoJsMBR9mX8iABtWcl5NMj9nO8Ir-OVkHR3xnd4zHOEnFdhBd__K1coYpxDG7oKSnwiIMcluMcNXlCz7N_tn_at7NBCqqjtx97LZPkwakX19SsYgXIE8NK9Unc0372Puq9TT3PFBMa1kMXVLvnfKGZ7YMWkGjpvCI1-O6ppq2Et9lID0ePjlY",
+    "epk": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5rJpSPdJCkC8bluI5iIv9z-UdB4zZLXLe7eCza5beLOhOz5ypong0GbRv2Qp7uyMgPN4Ug3w55FXNmVKpSE_yA"
+  }
+}

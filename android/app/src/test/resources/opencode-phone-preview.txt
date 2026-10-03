@@ -1,0 +1,15 @@
+  ┃
+  ┃  tell me in bullet points
+  ┃
+
+     Thought · 73ms
+
+     - Stop checking in artifacts: build/, accsim.egg-info/, .coverage/, documentation.html belong in CI/release, not git
+     ▣  Build · Muse Spark 1.3 Free · 2m 16s
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · Muse Spark 1.3 Free OpenCode Zen                                                                                                   ~/prat/acc-sim:main
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/developer/workspace/example                                                                                    23.6K (2%)  ctrl+p commands    • OpenCode 1.18.31

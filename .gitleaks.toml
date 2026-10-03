@@ -1,0 +1,11 @@
+title = "Herdr Remote source scanning"
+[extend]
+useDefault = true
+
+# Deterministic public crypto interoperability vector; never used at runtime.
+[[allowlists]]
+description = "Synthetic relay interoperability test vector"
+condition = "AND"
+paths = ['''(^|/)android/app/src/test/resources/relay-interop-vector\.json$''']
+regexTarget = "secret"
+regexes = ['''^GhjCxIHq9\-li676XZ7hPvaPLCO\-Wq8j\-8gcc272pIsM$''']

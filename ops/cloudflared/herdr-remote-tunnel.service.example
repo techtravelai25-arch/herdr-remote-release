@@ -1,0 +1,20 @@
+[Unit]
+Description=Herdr Remote Cloudflare Tunnel
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# Change this path if the repository is checked out elsewhere.
+ExecStart=/ABSOLUTE/PATH/TO/cloudflared tunnel --loglevel info --no-autoupdate run --token-file %h/.config/herdr-remote/cloudflared.tunnel-token
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,24 @@
+Herdr Remote
+Copyright (c) 2026 Herdr Remote contributors
+
+This project is licensed under the GNU Affero General Public License,
+version 3 or (at your option) any later version. See LICENSE.
+
+The structured-history, activity-timeline and Linux-companion features were
+inspired by dcolinmorgan/herdr-remote:
+https://github.com/dcolinmorgan/herdr-remote
+The implementations in this repository were written for this project's
+Node bridge, native Android client and Cloudflare service. No upstream
+application implementation files are bundled or copied into this release.
+
+The unmodified `discovery/herdr-api-schema.json` is from Herdr v0.9.0,
+maintained by the Herdr project and contributors, and is licensed under
+Apache-2.0. Its SHA-256 is
+5fb46b13fdaf39c88cf699b9806685868c7ee6b0142523d84391b1606416dc0a.
+See https://github.com/herdrdev/herdr/tree/v0.9.0 and
+licenses/Apache-2.0.txt. The Gradle wrapper is also Apache-2.0 licensed.
+
+Third-party dependencies retain their respective licences. Dependency
+versions and integrity hashes are recorded in the npm lockfiles and Gradle
+configuration. Herdr and Node.js downloaded by the optional Linux installer
+are separate upstream distributions under their respective licences.

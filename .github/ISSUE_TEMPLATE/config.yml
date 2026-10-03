@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Private security report
+    url: https://github.com/techtravelai25-arch/herdr-remote-release/security/advisories/new
+    about: Report vulnerabilities privately.

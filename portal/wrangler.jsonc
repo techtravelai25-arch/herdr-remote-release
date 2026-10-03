@@ -1,0 +1,94 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "herdr-remote-portal",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-09-20",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1,
+    "logs": {
+      "invocation_logs": false
+    }
+  },
+  "vars": {
+    "PORTAL_ORIGIN": "https://remote.example.com",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "",
+    "ALLOWED_EMAILS": "[]",
+    "DEVICES": "[]",
+    "FIREBASE_ANDROID_CONFIG": "",
+    "PUBLIC_SIGNUP_ENABLED": "false",
+    "LAPTOP_REGISTRATION_ENABLED": "false",
+    "EMAIL_FROM": "signin@example.com",
+    "RELAY_METRICS_ENABLED": "false",
+    "LEGACY_RELAY_UNTIL": "0",
+    "LEGACY_PORTAL_ORIGIN": "",
+    "PUBLIC_APK_URL": "https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "herdr-remote-portal",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "assets": {
+    "directory": "./release-assets",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": [
+        "signin@example.com"
+      ]
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RELAY",
+        "class_name": "Relay"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-relay",
+      "new_sqlite_classes": [
+        "Relay"
+      ]
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/15 * * * *"
+    ]
+  },
+  "ratelimits": [
+    {
+      "name": "EDGE_RELAY_LIMIT",
+      "namespace_id": "922011",
+      "simple": {
+        "limit": 12000,
+        "period": 60
+      }
+    },
+    {
+      "name": "EDGE_SIGNUP_LIMIT",
+      "namespace_id": "922012",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    }
+  ],
+  "routes": []
+}

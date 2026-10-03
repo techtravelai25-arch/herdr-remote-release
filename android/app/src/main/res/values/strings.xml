@@ -1,0 +1,7 @@
+<resources>
+    <string name="recovery_title">Herdr Remote closed unexpectedly</string>
+    <string name="recovery_body">The app saved a diagnostic report without account or credential data. Try opening again, or copy the report for support.</string>
+    <string name="recovery_copy">Copy error details</string>
+    <string name="recovery_retry">Try opening again</string>
+    <string name="recovery_update">Download update</string>
+</resources>

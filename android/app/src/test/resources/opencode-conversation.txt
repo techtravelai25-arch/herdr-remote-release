@@ -1,0 +1,62 @@
+Digging into your repo to surface concrete improvements.
+Repo improvement suggestions
+
+  → Read .
+Context
+
+17,916 tokens
+  Thought · 47ms
+2% used
+
+$0.00 spent
+  → Read README.md
+  → Read pyproject.toml
+LSP
+  → Read PRODUCT.md
+LSPs are disabled
+  → Read Makefile
+
+  Thought · 136ms
+
+  → Read .github
+  ✱ Glob "accsim/**/*.py" (58 matches)
+  → Read CONTRIBUTING.md
+  → Read CHANGELOG.md
+  │ README.md
+  │ validation.md
+  │
+  │ docs/architecture:
+  │ co-sim.md
+  │ overview.md
+  │ README.md
+  │ ...
+  │
+  │ Click to expand
+  │
+
+Here are three improvements worth starting with:
+
+## Make setup easier
+
+Document the shortest path from a fresh checkout to a passing simulation in `README.md`.
+
+## Catch regressions earlier
+
+Add a small, deterministic smoke test for the core simulation loop.
+
+## Keep architecture docs current
+
+Link the co-simulation overview from the contribution guide so new contributors can find it.
+
+▣ Build · Muse Spark 1.3 Free
+
+┃
+┃
+┃ Build · Muse Spark 1.3 Free OpenCode Zen
+~/prat/acc-sim:main
+
+│██████████████████████████
+███████████████████████████
+████████████████
+  ▪▪▪▪▪▪▪▪ esc interrupt
+17.9K (2%) ctrl+p commands · OpenCode 1.18.31

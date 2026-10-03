@@ -1,0 +1,14 @@
+# Herdr Remote Cloudflare Tunnel (locally-managed tunnel example)
+#
+# The MVP uses the remotely-managed token-file service in
+# herdr-remote-tunnel.service.example. Keep this file as a reference for a
+# locally-managed tunnel only; never commit a real credentials-file or token.
+# Replace every placeholder before using it.
+
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /home/REPLACE_WITH_LINUX_USER/.cloudflared/REPLACE_WITH_TUNNEL_UUID.json
+
+ingress:
+  - hostname: herdr-remote.REPLACE_WITH_DOMAIN
+    service: http://127.0.0.1:8787
+  - service: http_status:404

@@ -1,0 +1,58 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,mkdirSync,copyFileSync,writeFileSync,rmSync,existsSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {execFileSync} from 'node:child_process';
+test('source packaging includes build inputs and excludes tracked secrets; escaped PEM is rejected',t=>{
+ const root=mkdtempSync(join(tmpdir(),'herdr-source-test-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ mkdirSync(join(root,'ops'));mkdirSync(join(root,'src'));mkdirSync(join(root,'test'));mkdirSync(join(root,'portal'));
+ copyFileSync(new URL('../../ops/package-source.sh',import.meta.url),join(root,'ops/package-source.sh'));
+ copyFileSync(new URL('../../ops/companion-release-key.pem',import.meta.url),join(root,'ops/companion-release-key.pem'));
+ for(const name of ['LICENSE','NOTICE','package-lock.json','src/index.js','test/index.test.js','.env.production','.dev.vars.production','account.private.json','signing.p12'])writeFileSync(join(root,name),'fixture');
+ writeFileSync(join(root,'portal/wrangler.production.jsonc'),'{"account_id":"production-fixture"}');
+ execFileSync('git',['init','--quiet'],{cwd:root});execFileSync('git',['add','.'],{cwd:root});
+ const commit=()=>execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.test','commit','--quiet','-m','fixture'],{cwd:root});commit();
+ writeFileSync(join(root,'.git/info/exclude'),'dist/\n');
+ execFileSync('bash',[join(root,'ops/package-source.sh'),join(root,'dist')]);
+ const names=execFileSync('tar',['-tzf',join(root,'dist/herdr-remote-source.tar.gz')],{encoding:'utf8'}).split('\n');
+ for(const name of ['LICENSE','NOTICE','package-lock.json','src/index.js','test/index.test.js','ops/package-source.sh','ops/companion-release-key.pem'])assert.ok(names.includes('herdr-remote/'+name));
+ for(const name of ['.env.production','.dev.vars.production','account.private.json','signing.p12','portal/wrangler.production.jsonc'])assert.ok(!names.includes('herdr-remote/'+name));
+ assert.ok(names.includes('herdr-remote/SOURCE_REVISION'));
+ writeFileSync(join(root,'untracked.js'),'not release source');
+ assert.throws(()=>execFileSync('bash',[join(root,'ops/package-source.sh'),join(root,'dist')],{stdio:'pipe'}),/Release source is dirty/);
+ rmSync(join(root,'untracked.js'));
+ writeFileSync(join(root,'accidental.json'),JSON.stringify({private_key:'-----BEGIN PRIVATE KEY-----\n'+'A'.repeat(64)+'\n-----END PRIVATE KEY-----'}));
+ execFileSync('git',['add','accidental.json'],{cwd:root});commit();
+ assert.throws(()=>execFileSync('bash',[join(root,'ops/package-source.sh'),join(root,'dist')],{stdio:'pipe'}),/Refusing source archive containing private-key material/);
+});
+
+test('source packaging rejects private operator paths and imports before writing an archive',t=>{
+ const root=mkdtempSync(join(tmpdir(),'herdr-private-source-test-'));
+ const output=mkdtempSync(join(tmpdir(),'herdr-private-archive-test-'));
+ t.after(()=>{rmSync(root,{recursive:true,force:true});rmSync(output,{recursive:true,force:true});});
+ mkdirSync(join(root,'ops'));mkdirSync(join(root,'portal/src'),{recursive:true});mkdirSync(join(root,'src'));
+ copyFileSync(new URL('../../ops/package-source.sh',import.meta.url),join(root,'ops/package-source.sh'));
+ writeFileSync(join(root,'src/index.js'),'export const publicOnly = true;\n');
+ execFileSync('git',['init','--quiet'],{cwd:root});
+ const commit=()=>{execFileSync('git',['add','-A'],{cwd:root});execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.test','commit','--quiet','-m','fixture'],{cwd:root});};
+ const archive=()=>execFileSync('bash',[join(root,'ops/package-source.sh'),output],{encoding:'utf8',stdio:'pipe'});
+ const assertRejected=pattern=>{
+  assert.throws(archive,pattern);
+  assert.equal(existsSync(join(output,'herdr-remote-source.tar.gz')),false);
+ };
+ commit();
+ writeFileSync(join(root,'portal/src/operator.js'),'export const privateControl = true;\n');commit();
+ assertRejected(/private operator file: portal\/src\/operator\.js/);
+ rmSync(join(root,'portal/src/operator.js'));commit();
+ writeFileSync(join(root,'src/index.js'),['import {operatorPage} from',"'./operator-ui.js';"].join(' '));commit();
+ assertRejected(/private operator import: src\/index\.js/);
+ writeFileSync(join(root,'src/index.js'),'export const publicOnly = true;\n');commit();
+ mkdirSync(join(root,'operator-wrapper'));
+ writeFileSync(join(root,'operator-wrapper/worker.js'),'export default {};\n');commit();
+ assertRejected(/private operator file: operator-wrapper\/worker\.js/);
+ rmSync(join(root,'operator-wrapper'),{recursive:true});commit();
+ mkdirSync(join(root,'.private'));
+ writeFileSync(join(root,'.private/worker.js'),'export default {};\n');commit();
+ assertRejected(/private operator file: \.private\/worker\.js/);
+});

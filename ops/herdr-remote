@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve the repository from this file even when ~/.local/bin/herdr-remote is
+# a symlink. The CLI itself owns all argument parsing and uses fixed local
+# systemd units for pairing readiness.
+script_path="${BASH_SOURCE[0]}"
+while [[ -L "$script_path" ]]; do
+  link_dir="$(cd -P -- "$(dirname -- "$script_path")" && pwd)"
+  script_path="$(readlink -- "$script_path")"
+  [[ "$script_path" = /* ]] || script_path="$link_dir/$script_path"
+done
+script_dir="$(cd -P -- "$(dirname -- "$script_path")" && pwd)"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+
+if [[ "${1:-serve}" != setup ]]; then
+  export HERDR_REMOTE_CONFIG="${HERDR_REMOTE_CONFIG:-$repo_root/bridge/config.json}"
+fi
+exec node "$repo_root/bridge/src/cli.js" "$@"
