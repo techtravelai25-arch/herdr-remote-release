@@ -4,15 +4,33 @@ An Android companion for [Herdr](https://github.com/herdrdev/herdr). Read agent 
 
 [Download the Android APK](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) · [Release notes](docs/release-notes.md) · [Laptop setup](docs/setup.md)
 
-## Install
+## Quick start
 
-Download `herdr-remote.apk` from the release above. Open it on Android and allow installation from your download app when Android requests it. Android 8.0 (API 26) or newer is required.
+1. Install the [Android APK](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) on your phone (Android 8.0+).
+2. Install [Herdr](https://github.com/herdrdev/herdr) and your coding agents on your Linux PC. This release is tested with Herdr 0.9.0.
+3. Follow [laptop setup](docs/setup.md) to set up the companion and display your pairing QR.
+4. In the app, tap **Scan laptop QR** and scan the code shown on your PC.
 
-Version **0.8.26 (61)** uses package `dev.herdr.remote.community`. It installs separately from other Herdr Remote packages. This repository establishes a new release signing identity; an older community installation signed with another key requires a fresh installation and pairing. Verify [release checksums and signing](docs/releases.md).
+The setup guide covers the PC requirements and connection steps. The standard APK uses QR pairing; [cloud features](portal/README.md) are optional.
 
-On your laptop, install Herdr 0.9.0 (socket protocol 22), Node.js 22+, and the coding agents you use. Clone this repository and follow [laptop setup](docs/setup.md). Expose the loopback bridge through your own HTTPS route, then scan its short-lived QR code in the app. Provider accounts and credentials stay on your laptop.
+Version **0.8.26 (61)** installs as `dev.herdr.remote.community`. An older community APK with a different signer requires a fresh installation and pairing. See [release verification](docs/releases.md).
 
-The distributed APK supports self-hosted QR pairing. Optional portal sign-in, cloud notifications, and automatic update services require your own deployment and a configured app build; see [portal setup](portal/README.md). No hosted service account is required for direct pairing. The Linux installer uses systemd; Windows and macOS hosting are not verified. An iOS app is not included in this release.
+## Screenshots
+
+<table>
+  <tr>
+    <th>Sessions</th>
+    <th>Agent conversation</th>
+    <th>Laptop setup</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/sessions.png" alt="Example sessions grouped by project, with a session needing attention" width="260"></td>
+    <td><img src="docs/screenshots/conversation.png" alt="Example agent conversation with review results and a message composer" width="260"></td>
+    <td><img src="docs/screenshots/setup.png" alt="Community app onboarding with laptop setup and QR pairing instructions" width="260"></td>
+  </tr>
+</table>
+
+Sessions and conversation images are native UI previews with example data. Laptop setup is captured from the community APK.
 
 ## Development
 
@@ -26,6 +44,10 @@ npm test --prefix portal
 ```
 
 Android builds require JDK 17 and Android SDK 36. See [Android builds](android/README.md), [contributing](CONTRIBUTING.md), [security and data handling](SECURITY.md), and the [release process](docs/releases.md).
+
+## Release publishing
+
+Publish source updates and releases to this repository only as **techtravelai25-arch**. Use that name for both Git author and committer, with the account email `334168460+techtravelai25-arch@users.noreply.github.com`. Authenticate pushes and release updates with the same GitHub account. See [repository instructions](AGENTS.md).
 
 ## License
 
