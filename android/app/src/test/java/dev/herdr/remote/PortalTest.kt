@@ -11,20 +11,6 @@ class PortalTest {
         assertTrue(accountDeletionOutcomeUnknown(BridgeHttpException(503, "temporarily unavailable")))
         assertFalse(accountDeletionOutcomeUnknown(BridgeHttpException(400, "invalid request")))
     }
-    private fun challenge(url: String) = LoginChallenge("opaque-device-secret", "ABCD-1234", url, 600, 3)
-
-    @Test fun browserLoginIsRestrictedToPortalOrigin() {
-        challenge("https://portal.example.test/login?code=ABCD-1234").validate(TEST_PORTAL_ORIGIN)
-        listOf(
-            "http://portal.example.test/login",
-            "https://portal.example.test.evil.example/login",
-            "https://evil.example/login",
-            "https://portal.example.test:8443/login",
-            "https://user:password@portal.example.test/login",
-            "https://portal.example.test/login#unexpected",
-        ).forEach { address -> assertThrows("Reject $address", IllegalArgumentException::class.java) { challenge(address).validate(TEST_PORTAL_ORIGIN) } }
-    }
-
     @Test fun grantsAreBoundToSelectedDeviceAndShortExpiry() {
         val grant = DeviceGrant("short-lived-device-token", 1300, "https://laptop.example.test", "laptop")
         val credentials = grant.credentials("laptop", 1000)

@@ -9,7 +9,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
-import okhttp3.HttpUrl.Companion.toHttpUrl
 
 internal val PORTAL_ORIGIN get() = Deployment.requireOrigin(BuildConfig.PORTAL_ORIGIN)
 
@@ -17,15 +16,6 @@ internal val PORTAL_ORIGIN get() = Deployment.requireOrigin(BuildConfig.PORTAL_O
 @Serializable data class RemoteDevice(val id: String, val label: String, val url: String, val transport: String? = null)
 @Serializable data class EmailChallenge(val challengeId: String, val expiresIn: Long, val resendAfter: Long)
 data class PendingEmailLogin(val email: String, val challengeId: String, val expiresAt: Long, val resendAt: Long)
-@Serializable data class LoginChallenge(val deviceCode: String, val userCode: String, val verificationUrl: String, val expiresIn: Long, val interval: Long) {
-    fun validate(portalOrigin: String = PORTAL_ORIGIN): LoginChallenge = apply {
-        val url = verificationUrl.toHttpUrl()
-        val origin = Deployment.requireOrigin(portalOrigin).toHttpUrl()
-        require(url.isHttps && url.host == origin.host && url.port == origin.port && url.username.isEmpty() && url.password.isEmpty() && url.fragment == null) { "The sign-in address is invalid." }
-        require(deviceCode.isNotBlank() && userCode.isNotBlank() && expiresIn in 1..1800 && interval in 1..30) { "The sign-in request is invalid." }
-    }
-}
-data class PendingLogin(val userCode: String, val verificationUrl: String)
 @Serializable internal data class DeviceGrant(val token: String, val expiresAt: Long, val url: String, val deviceId: String) {
     fun credentials(selected: String, now: Long = System.currentTimeMillis() / 1000): Credentials {
         require(deviceId == selected && token.isNotBlank() && expiresAt > now + 60 && expiresAt <= now + 600) { "The laptop authorization is invalid. Try again." }
@@ -60,14 +50,6 @@ class Portal(private val store: AccountStore) {
         api().call(listOf("v1", "auth", "email", "verify"), "POST", buildJsonObject { put("challengeId", challengeId); put("code", code) })
     ).also { require(it.token.isNotBlank() && it.email.isNotBlank() && it.expiresAt > System.currentTimeMillis() / 1000) { "Invalid sign-in response. Try again." } }
     suspend fun claim(deviceId: String, claimToken: String) { authenticated(listOf("v1", "devices", "claim"), "POST", buildJsonObject { put("deviceId", deviceId); put("claimToken", claimToken) }) }
-    suspend fun start(): LoginChallenge = Bridge.json.decodeFromJsonElement<LoginChallenge>(api().call(listOf("v1", "auth", "start"), "POST")).validate()
-    suspend fun poll(deviceCode: String): AccountSession? {
-        val result = api().call(listOf("v1", "auth", "poll"), "POST", buildJsonObject { put("deviceCode", deviceCode) })
-        if (result["status"]?.jsonPrimitive?.contentOrNull == "pending") return null
-        return Bridge.json.decodeFromJsonElement<AccountSession>(result).also {
-            require(it.token.isNotBlank() && it.email.isNotBlank() && it.expiresAt > System.currentTimeMillis() / 1000) { "The sign-in response is invalid." }
-        }
-    }
     internal suspend fun authenticated(path: List<String>, method: String = "GET", body: JsonObject = buildJsonObject {}): JsonObject {
         val session = withContext(Dispatchers.IO) { store.load() } ?: throw PortalSignInRequired()
         if (session.expiresAt <= System.currentTimeMillis() / 1000) throw PortalSignInRequired()

@@ -1,9 +1,14 @@
 package dev.herdr.remote
 
+import android.content.Context
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -32,6 +37,46 @@ class SessionsDeliveryUiTest {
         assertTrue(top("Older session") < top("Recent session"))
         compose.onNodeWithText("Older session").performClick()
         compose.runOnIdle { assertEquals("old", selected) }
+    }
+
+    @Test fun dashboardKeepsActiveRowsAboveIdleAcrossProjectGroupsWithoutDroppingRows() {
+        val preferences = InstrumentationRegistry.getInstrumentation().targetContext
+            .getSharedPreferences("session_browsing", Context.MODE_PRIVATE)
+        val originalGrouping = preferences.getString("grouping", null)
+        preferences.edit().putString("grouping", "PROJECT").commit()
+        try {
+            val listState = LazyListState()
+            val panes = listOf(
+                Pane("idle-a", "one", title = "Idle Alpha", cwd = "/alpha", projectId = "alpha",
+                    projectLabel = "Alpha", status = "idle", lastActivity = "2026-01-05T00:00:00Z"),
+                Pane("working-b", "two", title = "Working Beta", cwd = "/beta", projectId = "beta",
+                    projectLabel = "Beta", status = "working", lastActivity = "2026-01-02T00:00:00Z"),
+                Pane("waiting-a", "one", title = "Waiting Alpha", cwd = "/alpha", projectId = "alpha",
+                    projectLabel = "Alpha", status = "needs_input", lastActivity = "2026-01-01T00:00:00Z"),
+            )
+            val state = RemoteState(online = true, snapshot = Snapshot(herdrOnline = true, panes = panes))
+            compose.setContent { HerdrTheme {
+                SessionsScreen(state, {}, {}, {}, {}, {}, listState = listState)
+            } }
+
+            val expected = listOf(
+                3 to "group:0:project:beta", 4 to "pane:working-b",
+                5 to "group:0:project:alpha", 6 to "pane:waiting-a",
+                7 to "group:2:project:alpha", 8 to "pane:idle-a",
+            )
+            for ((index, key) in expected) {
+                compose.onNode(hasScrollToIndexAction()).performScrollToIndex(index)
+                compose.runOnIdle {
+                    assertEquals(10, listState.layoutInfo.totalItemsCount)
+                    assertEquals(key, listState.layoutInfo.visibleItemsInfo.first { it.index == index }.key)
+                }
+            }
+            compose.onNodeWithText("Idle Alpha").assertExists()
+        } finally {
+            preferences.edit().apply {
+                if (originalGrouping == null) remove("grouping") else putString("grouping", originalGrouping)
+            }.commit()
+        }
     }
 
     @Test fun uncertainCreationRequiresConfirmationAndNeverRetries() {

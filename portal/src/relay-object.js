@@ -5,27 +5,35 @@ import {sha256Hex} from './crypto-utils.js';
 const clock=()=>Math.floor(Date.now()/1000);
 const UPLOAD_DEADLINE_MS=15000;
 const uuid=value=>typeof value==='string'&&/^[a-f0-9-]{36}$/i.test(value);
+const initialState=()=>({initialized:false,strict:false,revoked:false,generation:0,revocations:0,laptopId:'',mirrorPending:false,mirrorAttempts:0,caps:{}});
+const emptyBudget=bucket=>({bucket,rpc:0,connect:0,ws:0,control:0,bytes:0,cap:{}});
 /** Authoritative routing metadata only. Never persist payloads, control tokens or private keys. */
 export class Relay extends DurableObject {
   constructor(ctx,env) {
     super(ctx,env);
     this.pending=new Map();this.reading=new Map();this.metrics=new RelayMetrics(env.RELAY_METRICS_ENABLED==='true');
-    this.state={initialized:false,strict:false,revoked:false,generation:0,revocations:0,laptopId:'',mirrorPending:false,mirrorAttempts:0,caps:{},budget:{bucket:0,rpc:0,connect:0,ws:0,control:0,bytes:0,cap:{}}};
-    ctx.blockConcurrencyWhile(async()=>{this.state=await ctx.storage.get('state')||this.state;});
+    this.state=initialState();
+    // Per-minute admission counters live in memory only. Eviction or hibernation
+    // resets them, which at most grants one fresh minute; persisting them cost a
+    // storage write per RPC and per WebSocket frame.
+    this.counters=emptyBudget(0);
+    ctx.blockConcurrencyWhile(async()=>{
+      const stored=await ctx.storage.get('state');
+      // Older objects stored counters inside state; drop them on load.
+      if(stored){const {budget:_legacyBudget,...persistent}=stored;this.state={...initialState(),...persistent};}
+    });
   }
+  /** Persist identity, revocation, generation and capability state. Call only after a change. */
   async save(){await this.ctx.storage.put('state',this.state);}
-  async budget(kind,bytes=0,capId='',bootstrap=false) {
+  budget(kind,bytes=0,capId='',bootstrap=false) {
     const minute=Math.floor(clock()/60);
-    const b=this.state.budget;
-    if(b.bucket!==minute)this.state.budget={bucket:minute,rpc:0,connect:0,ws:0,control:0,bytes:0,cap:{}};
-    const current=this.state.budget;
-    if(kind==='connect'){if((current.connect||0)>=60)return false;current.connect=(current.connect||0)+1;await this.save();return true;}
-    if(kind==='ws'){
-      current.ws++;current.bytes+=bytes;
-      await this.save();return current.ws<=2400&&current.bytes<=32*1024*1024;
-    }
+    if(this.counters.bucket!==minute)this.counters=emptyBudget(minute);
+    const current=this.counters;
+    if(kind==='connect'){if(current.connect>=60)return false;current.connect++;return true;}
+    if(kind==='control')return ++current.control<=300;
+    if(kind==='ws'){current.ws++;current.bytes+=bytes;return current.ws<=2400&&current.bytes<=32*1024*1024;}
     current.rpc++;current.cap[capId]=(current.cap[capId]||0)+1;
-    await this.save();return current.rpc<=1800&&current.cap[capId]<=(bootstrap?10:600);
+    return current.rpc<=1800&&current.cap[capId]<=(bootstrap?10:600);
   }
   async fetch(request) {
     if(new URL(request.url).pathname!=='/rpc')return this.handle(request);
@@ -53,8 +61,9 @@ export class Relay extends DurableObject {
     if(this.state.revoked)return relayError(404,'laptop_unavailable','This laptop has been revoked.');
     if(path==='/connect'&&request.headers.get('upgrade')==='websocket') {
       if(!this.state.initialized)return relayError(503,'laptop_unavailable','Register this laptop again.');
-      if(!await this.budget('connect'))return relayError(429,'rate_limited','Please wait before reconnecting.');
+      if(!this.budget('connect'))return relayError(429,'rate_limited','Please wait before reconnecting.');
       for(const old of this.ctx.getWebSockets()){old.close(4000,'Laptop reconnected');this.disconnected(old);}
+      // Hibernated sockets are matched by generation after a wake-up, so it must persist.
       this.state.generation++;await this.save();
       const pair=new WebSocketPair();this.ctx.acceptWebSocket(pair[1],['laptop']);
       pair[1].serializeAttachment({generation:this.state.generation});
@@ -67,7 +76,7 @@ export class Relay extends DurableObject {
     if(bearer){const h=await sha256Hex(bearer);const match=Object.entries(this.state.caps).find(([,cap])=>cap.hash===h&&(cap.expires===0||cap.expires>clock()));if(match)capability={id:match[0],kind:match[1].kind};}
     const legacyUntil=Number(this.env.LEGACY_RELAY_UNTIL||0);
     if(!capability&&(bearer||this.state.strict||clock()>=legacyUntil))return relayError(401,'routing_required','Scan a new laptop QR code to authorize this phone.');
-    if(!await this.budget('rpc',0,capability?.id||'legacy',capability?.kind==='bootstrap'))return relayError(429,'rate_limited','Please wait before trying again.');
+    if(!this.budget('rpc',0,capability?.id||'legacy',capability?.kind==='bootstrap'))return relayError(429,'rate_limited','Please wait before trying again.');
     if(this.state.revoked)return relayError(404,'laptop_unavailable','This laptop has been revoked.');
     if(capability){const cap=this.state.caps[capability.id];if(!cap||(cap.expires!==0&&cap.expires<=clock()))return relayError(401,'routing_required','This phone authorization expired or was revoked.');}
     else if(this.state.strict||clock()>=legacyUntil)return relayError(401,'routing_required','Scan a new laptop QR code to authorize this phone.');
@@ -108,12 +117,11 @@ export class Relay extends DurableObject {
   }
   async webSocketMessage(socket,message) {
     if(this.state.revoked||socket.deserializeAttachment()?.generation!==this.state.generation){socket.close(4001,'Inactive connection');return;}
-    if(typeof message!=='string'||message.length>MAX_ENVELOPE_BYTES||new TextEncoder().encode(message).byteLength>MAX_ENVELOPE_BYTES||!await this.budget('ws',new TextEncoder().encode(message).byteLength)){socket.close(1008,'Message budget exceeded');this.disconnected(socket);return;}
+    if(typeof message!=='string'||message.length>MAX_ENVELOPE_BYTES||new TextEncoder().encode(message).byteLength>MAX_ENVELOPE_BYTES||!this.budget('ws',new TextEncoder().encode(message).byteLength)){socket.close(1008,'Message budget exceeded');this.disconnected(socket);return;}
     if(this.state.revoked||socket.deserializeAttachment()?.generation!==this.state.generation){socket.close(4001,'Inactive connection');return;}
     let frame;try{frame=JSON.parse(message);}catch{socket.close(1003,'Invalid frame');this.disconnected(socket);return;}
     if(frame.type==='capability'){
-      this.state.budget.control=(this.state.budget.control||0)+1;await this.save();
-      if(this.state.budget.control>300){socket.close(1008,'Control budget exceeded');this.disconnected(socket);return;}
+      if(!this.budget('control')){socket.close(1008,'Control budget exceeded');this.disconnected(socket);return;}
       let error;const cap=frame.capability;
       if(!uuid(frame.id)||!uuid(cap?.id))error='invalid_capability';
       else if(frame.action==='revoke'&&!this.state.caps[cap.id]){if(!await this.ctx.storage.get('revoked:'+cap.id))error='capability_not_found';}
@@ -124,11 +132,17 @@ export class Relay extends DurableObject {
         for(const entry of this.pending.values())if(entry.capId===cap.id)entry.finish(relayError(401,'routing_required','This phone was revoked.'));
       }else if(frame.action==='register'&&await this.ctx.storage.get('revoked:'+cap.id))error='capability_revoked';
       else if(frame.action==='register'){
-        for(const [id,value] of Object.entries(this.state.caps))if(value.expires!==0&&value.expires<=clock())delete this.state.caps[id];
+        let pruned=false;
+        for(const [id,value] of Object.entries(this.state.caps))if(value.expires!==0&&value.expires<=clock()){delete this.state.caps[id];pruned=true;}
         if(!['bootstrap','phone'].includes(cap.kind)||!/^[a-f0-9]{64}$/.test(cap.tokenHash||'')||!Number.isSafeInteger(cap.expires)||(cap.kind==='phone'?cap.expires!==0:cap.expires<=clock()||cap.expires>clock()+600))error='invalid_capability';
         else if(this.state.caps[cap.id]&&(this.state.caps[cap.id].hash!==cap.tokenHash||this.state.caps[cap.id].kind!==cap.kind||this.state.caps[cap.id].expires!==cap.expires))error='capability_conflict';
         else if(!this.state.caps[cap.id]&&(Object.keys(this.state.caps).length>=128||this.state.revocations>=4096))error='capability_limit';
-        else {const promoted=!this.state.strict;this.state.strict=true;this.state.caps[cap.id]={hash:cap.tokenHash,kind:cap.kind,expires:cap.expires};await this.save();if(promoted)for(const entry of this.reading.values())if(!entry.capId)entry.cancel(relayError(401,'routing_required','Scan a new laptop QR code to authorize this phone.'));}
+        else {
+          // Re-registering an identical capability is idempotent and needs no write.
+          const promoted=!this.state.strict,added=!this.state.caps[cap.id];
+          this.state.strict=true;this.state.caps[cap.id]={hash:cap.tokenHash,kind:cap.kind,expires:cap.expires};
+          if(promoted||added||pruned)await this.save();
+          if(promoted)for(const entry of this.reading.values())if(!entry.capId)entry.cancel(relayError(401,'routing_required','Scan a new laptop QR code to authorize this phone.'));}
       }else error='invalid_action';
       socket.send(JSON.stringify({type:'capability-ack',id:frame.id,ok:!error,...(error?{error}:{})}));return;
     }

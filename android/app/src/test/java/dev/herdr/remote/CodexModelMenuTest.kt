@@ -51,4 +51,19 @@ class CodexModelMenuTest {
         assertFalse(canChangeAgentModel(state.copy(outputReady = false), pane))
         assertFalse(canChangeAgentModel(state.copy(selectedId = "another-pane"), pane))
     }
+    @Test fun claudePaddedModelRowsSplitIntoNameAndDescription() {
+        assertEquals("Opus 5.5" to "For complex work and everyday tasks", modelOptionParts("claude", "Opus 5.5               For complex work and everyday tasks"))
+        assertEquals("Sonnet 5.5 ✔" to "Most efficient for simpler tasks", modelOptionParts("claude", "Sonnet 5.5 ✔           Most efficient for simpler tasks"))
+        assertEquals("Default (recommended)" to "Sonnet 5.5 · Efficient for routine tasks", modelOptionParts("claude", "Default (recommended)  Sonnet 5.5 · Efficient for routine tasks"))
+        assertEquals("Haiku 4.5" to null, modelOptionParts("claude", "Haiku 4.5"))
+        // Other providers keep their own wording untouched.
+        assertEquals("GPT 5.6   Luna" to null, modelOptionParts("codex", "GPT 5.6   Luna"))
+    }
+    @Test fun claudeSwitchConfirmationIsAValidSecondStageWithItsExplanation() {
+        val menu = Bridge.json.decodeFromString<Output>("""{"agentModelMenu":{"id":"c1","title":"Switch model?","stage":"confirm","provider":"claude","note":"Your next response will be slower.\nThe history is re-read.","selectedIndex":0,"options":["Yes, switch to Haiku 4.5","No, go back"]}}""").agentModelMenu!!
+        assertTrue(menu.isValid())
+        assertEquals("Your next response will be slower.\nThe history is re-read.", menu.note)
+        assertFalse(menu.copy(stage = "approval").isValid())
+        assertNull(Bridge.json.decodeFromString<Output>("""{"codexModelMenu":{"id":"m","title":"Select model","options":["A"]}}""").codexModelMenu!!.note)
+    }
 }

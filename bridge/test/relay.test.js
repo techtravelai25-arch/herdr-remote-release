@@ -88,8 +88,40 @@ test('socket discovery detects one live session and refuses ambiguous sessions',
 });
 
 
-test('replay IDs survive companion restart',async t=>{
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'replay-test-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));const store=new Store(dir),options={identity:laptop,port:1234,store,fetchImpl:async()=>new Response('{}')},a=request();await createRelayHandler(options)(a.envelope);await assert.rejects(createRelayHandler(options)(a.envelope),/replayed/);
+function replayFixture(t,extra={}){
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'replay-test-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const store=new Store(dir),writes=[],write=store.write.bind(store);
+ store.write=(name,...rest)=>{if(name==='relay-replay.json')writes.push(name);return write(name,...rest);};
+ return {store,writes,options:{identity:laptop,port:1234,store,fetchImpl:async()=>new Response('{}'),...extra}};
+}
+const post=()=>request({method:'POST',path:'/v1/panes/p/prompt',headers:{},body:'',timestamp:Date.now()});
+test('replay IDs survive companion restart and crashes',async t=>{
+ const {store,options}=replayFixture(t),a=request(),b=post();
+ // Neither handler is closed: both IDs must already be on disk when forwarded.
+ await createRelayHandler(options)(a.envelope);
+ await assert.rejects(createRelayHandler(options)(a.envelope),/replayed/,'a restart keeps polled IDs');
+ await createRelayHandler(options)(b.envelope);
+ await assert.rejects(createRelayHandler(options)(b.envelope),/replayed/);
+ assert.ok(!fs.readFileSync(path.join(store.dir,'relay-replay.json'),'utf8').includes('\n'),'replay file is compact');
+});
+test('polling requests persist replay IDs without fsync; mutations stay durable',async t=>{
+ const {writes,options}=replayFixture(t),handle=createRelayHandler(options),modes=[];
+ options.store.write=(write=>(name,data,opts)=>{if(name==='relay-replay.json')modes.push(opts?.durable);return write(name,data,opts);})(options.store.write);
+ const polls=Array.from({length:3},()=>request());
+ for(const poll of polls)await handle(poll.envelope);
+ await handle(post().envelope);
+ assert.deepEqual(modes,[false,false,false,true]);
+ assert.equal(writes.length,4);
+});
+test('a full replay window never rejects unseen requests',async t=>{
+ let time=Date.now();const {options}=replayFixture(t,{replayLimit:3,now:()=>time});const handle=createRelayHandler(options);
+ const sent=Array.from({length:5},()=>request({method:'GET',path:'/v1/health',headers:{},body:'',timestamp:time}));
+ for(const item of sent)assert.equal(decryptPayload(item.key,laptop.id,await handle(item.envelope),'response').status,200);
+ for(const item of sent.slice(-3))await assert.rejects(handle(item.envelope),/replayed/,'recent IDs stay rejected');
+ time+=240001;const fresh=request({method:'GET',path:'/v1/health',headers:{},body:'',timestamp:time});
+ assert.equal(decryptPayload(fresh.key,laptop.id,await handle(fresh.envelope),'response').status,200);
+ await assert.rejects(handle(sent[4].envelope),/expired/,'the timestamp window still bounds old envelopes');
+ handle.close();
 });
 
 test('download chunks retain headers and reconstruct attachments and project files privately',async t=>{

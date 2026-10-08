@@ -6,6 +6,8 @@ const now=()=>Math.floor(Date.now()/1000);
 const random=()=>Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
 const validToken=value=>typeof value==='string'&&/^[\w-]{43}$/.test(value);
 const equal=(a,b)=>typeof a==='string'&&typeof b==='string'&&a.length===b.length&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
+// Outbound email cost breaker and per-IP daily share (25000/50 = 500 addresses).
+const EMAIL_GLOBAL_DAILY=25000,EMAIL_IP_DAILY=50;
 const enabled=env=>env.PUBLIC_SIGNUP_ENABLED==='true';
 export const accountAllowed=(env,email,legacyAllowed)=>enabled(env)||legacyAllowed(env,email);
 export async function lookupLaptop(env,id,token) {
@@ -54,7 +56,10 @@ export async function handlePublic(request,env,{body,rate,fail,json}) {
     const input=await body(request);
     const email=typeof input.email==='string'?input.email.trim().toLowerCase():'';
     if(email.length>254||!/^\S+@[^\s@]+\.[^\s@]+$/.test(email)||/[<>\r\n]/.test(email))fail(400,'invalid_email','Enter a valid email address.');
-    if(!await admit(env,crypto.randomUUID(),[{key:'email:global',limit:10000,window:86400},{key:`email:ip:${ip}`,limit:20,window:3600},{key:`email:daily:${email}`,limit:10,window:86400},{key:`email:cooldown:${email}`,limit:1,window:60,cooldown:true}]))fail(429,'rate_limited','Please wait before trying again.');
+    // admit() is all-or-nothing, so per-IP or per-address rejections never charge
+    // the global counter. The daily per-IP cap means the global send breaker needs
+    // hundreds of addresses, not a handful, to trip.
+    if(!await admit(env,crypto.randomUUID(),[{key:'email:global',limit:EMAIL_GLOBAL_DAILY,window:86400},{key:`email:ip:${ip}`,limit:20,window:3600},{key:`email:ip:daily:${ip}`,limit:EMAIL_IP_DAILY,window:86400},{key:`email:daily:${email}`,limit:10,window:86400},{key:`email:cooldown:${email}`,limit:1,window:60,cooldown:true}]))fail(429,'rate_limited','Please wait before trying again.');
     const challengeId=random(),code=otp(),challengeHash=await sha256Hex(challengeId);
     await env.DB.batch([
       env.DB.prepare('DELETE FROM email_challenges WHERE expires_at<=?').bind(now()),
@@ -136,7 +141,7 @@ export async function startWebDeletion(env,email,ip) {
   if(!env.EMAIL||!env.EMAIL_FROM||typeof env.EMAIL_OTP_SECRET!=='string'||env.EMAIL_OTP_SECRET.length<32)throw Error('deletion_email_unavailable');
   const normalized=typeof email==='string'?email.trim().toLowerCase():'';
   if(normalized.length>254||!/^\S+@[^\s@]+\.[^\s@]+$/.test(normalized)||/[<>\r\n]/.test(normalized))return null;
-  if(!await admit(env,crypto.randomUUID(),[{key:'deletion:global',limit:10000,window:86400},{key:`deletion:ip:${ip}`,limit:20,window:3600},{key:`deletion:daily:${normalized}`,limit:10,window:86400},{key:`deletion:cooldown:${normalized}`,limit:1,window:60,cooldown:true}]))return false;
+  if(!await admit(env,crypto.randomUUID(),[{key:'deletion:global',limit:EMAIL_GLOBAL_DAILY,window:86400},{key:`deletion:ip:${ip}`,limit:20,window:3600},{key:`deletion:ip:daily:${ip}`,limit:EMAIL_IP_DAILY,window:86400},{key:`deletion:daily:${normalized}`,limit:10,window:86400},{key:`deletion:cooldown:${normalized}`,limit:1,window:60,cooldown:true}]))return false;
   const challengeId=random(),code=otp(),challengeHash=await sha256Hex(challengeId);
   await env.DB.prepare("INSERT INTO email_challenges(challenge_hash,email,code_hash,expires_at,purpose) VALUES (?,?,?,?,'deletion')").bind(challengeHash,normalized,await otpHash(env,challengeId,code),now()+600).run();
   try {

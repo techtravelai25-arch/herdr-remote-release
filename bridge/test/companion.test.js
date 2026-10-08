@@ -122,3 +122,13 @@ test('a concurrent installer fails before modifying the active release',async t=
  const {spawn}=await import('node:child_process'),{once}=await import('node:events'),f=upgradeFixture(t);const holder=spawn('flock',[path.join(f.base,'install.lock'),'sh','-c','echo locked; sleep 1'],{stdio:['ignore','pipe','ignore']});await once(holder.stdout,'data');
  const result=f.run({});assert.equal(result.status,1);assert.match(result.stderr,/Another companion installation/);assert.equal(fs.realpathSync(path.join(f.base,'current')),f.old);await once(holder,'exit');
 });
+test('setup checks the port it will serve: 8788 for a new config, the serve default when a config omits it',async t=>{
+ const home=homeFixture(t),configPath=path.join(home,'config.json'),checked=[];
+ const deps={home,configPath,detectSocket:async()=>'/custom/herdr.sock',checkSocket:async()=>true,checkPort:async port=>{checked.push(port);},verifyHerdr:async()=>{},
+  fetchImpl:async()=>new Response(JSON.stringify({id:'test-laptop',relayToken:'r'.repeat(43),claimToken:'c'.repeat(43),url:'https://remote.example.com'}))};
+ const fresh=await setupCompanion(['--portal','https://remote.example.com','--foreground','--no-pair'],deps);
+ assert.equal(fresh.config.port,8788);
+ const {port,...withoutPort}=JSON.parse(fs.readFileSync(configPath,'utf8'));fs.writeFileSync(configPath,JSON.stringify(withoutPort));
+ const legacy=await setupCompanion(['--portal','https://remote.example.com','--foreground','--no-pair'],deps);
+ assert.equal(legacy.config.port,8787);assert.deepEqual(checked,[8788,8787]);
+});

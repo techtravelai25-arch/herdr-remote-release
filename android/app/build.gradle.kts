@@ -34,7 +34,7 @@ android {
     namespace = "dev.herdr.remote"
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/distribution-notices"))
     compileSdk = 36
-    defaultConfig { applicationId = "dev.herdr.remote.community"; minSdk = 26; targetSdk = 36; versionCode = 61; versionName = "0.8.26"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "dev.herdr.remote.community"; minSdk = 26; targetSdk = 36; versionCode = 69; versionName = "0.8.34"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     defaultConfig {
         buildConfigField("String", "PORTAL_ORIGIN", "\"$portalOrigin\"")
         buildConfigField("String", "UPDATE_ORIGIN", "\"$updateOrigin\"")
@@ -60,7 +60,13 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildTypes {
         debug { applicationIdSuffix = ".debug"; versionNameSuffix = "-dev" }
-        release { isDebuggable = false; isMinifyEnabled = false; if (releaseKey != null) signingConfig = signingConfigs.getByName("release") }
+        release {
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (releaseKey != null) signingConfig = signingConfigs.getByName("release")
+        }
     }
 }
 dependencies {
@@ -71,7 +77,6 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")

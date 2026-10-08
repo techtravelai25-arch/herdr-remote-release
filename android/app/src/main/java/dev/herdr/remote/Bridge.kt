@@ -21,6 +21,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
@@ -34,9 +35,39 @@ import kotlin.coroutines.resumeWithException
 internal fun shouldRefreshGrant(method: String, statusCode: Int, hasPortalGrant: Boolean): Boolean =
     method == "GET" && statusCode == 401 && hasPortalGrant
 
+/** Direct HTTPS bodies are capped like relay envelopes; review diffs are the largest legitimate JSON replies. */
+internal const val BRIDGE_RESPONSE_LIMIT = 2 * 1024 * 1024
+
+/** Reads at most [limit] bytes; returns null when the body is larger, without buffering the remainder. */
+internal fun readBoundedBody(body: ResponseBody?, limit: Int): ByteArray? {
+    val source = body?.source() ?: return ByteArray(0)
+    source.request(limit + 1L)
+    if (source.buffer.size > limit) return null
+    return source.buffer.readByteArray()
+}
+
+/** Decode a bridge or portal reply; a successful reply must be a bounded JSON object. */
+internal fun parseBridgeResponse(response: Response): JsonObject {
+    val raw = readBoundedBody(response.body, BRIDGE_RESPONSE_LIMIT)
+    val parsed = raw?.let { bytes -> runCatching { Bridge.json.parseToJsonElement(bytes.toString(Charsets.UTF_8)) as? JsonObject }.getOrNull() }
+    if (!response.isSuccessful) {
+        val error = parsed?.get("error") as? JsonObject
+        val message = error?.get("message")?.jsonPrimitive?.contentOrNull
+        throw BridgeHttpException(response.code, message ?: "Server returned HTTP ${response.code}. Check the address and pairing.",
+            error?.get("code")?.jsonPrimitive?.contentOrNull,
+            error?.get("operationId")?.jsonPrimitive?.contentOrNull,
+            error?.get("operationStatus")?.jsonPrimitive?.contentOrNull)
+    }
+    if (parsed != null) return parsed
+    val observation = response.request.method in listOf("GET", "HEAD")
+    val problem = if (raw == null) "The laptop reply was too large to read." else "The laptop sent a reply this app cannot read (HTTP ${response.code}, not JSON)."
+    throw java.io.IOException(if (observation) "$problem Update the laptop companion or check the server address."
+        else "$problem This action may have completed; check the laptop before sending it again.")
+}
+
 @Serializable data class Workspace(val id: String, val label: String)
 @Serializable data class Project(val id: String, val label: String)
-@Serializable data class Pane(val id: String, val workspaceId: String, val tabId: String = "", val title: String = "Terminal", val cwd: String = "", val kind: String = "terminal", val status: String = "unknown", val lastActivity: String? = null, val revision: Long = 0, val projectId: String? = null, val projectLabel: String? = null, val completionEventId: String? = null, val completionAcknowledged: Boolean = false, val acknowledgedCompletionEventIds: List<String> = emptyList())
+@Serializable data class Pane(val id: String, val workspaceId: String, val tabId: String = "", val title: String = "Terminal", val cwd: String = "", val kind: String = "terminal", val status: String = "unknown", val lastActivity: String? = null, val revision: Long = 0, val projectId: String? = null, val projectLabel: String? = null, val completionEventId: String? = null, val completionAcknowledged: Boolean = false, val acknowledgedCompletionEventIds: List<String> = emptyList(), val attentionEventId: String? = null, val attentionAcknowledged: Boolean = false, val acknowledgedAttentionEventIds: List<String> = emptyList())
 @Serializable data class Snapshot(val herdrOnline: Boolean = false, val hostname: String = "Laptop", val workspaces: List<Workspace> = emptyList(), val panes: List<Pane> = emptyList(), val projects: List<Project> = emptyList(), val error: String? = null, val allowTerminalInput: Boolean = false, val canStartHerdr: Boolean = false, val attachmentsEnabled: Boolean = false, val reviewEnabled: Boolean = false, val sessionResumeSupported: Boolean = false, val directoryBrowsingEnabled: Boolean = false, val terminalCreationEnabled: Boolean = false, val terminalInputEnabled: Boolean = false, val terminalSnapshotSource: String? = null, val codexModelSelectionEnabled: Boolean = false, val agentModelSelectionEnabled: Boolean = false, val modelSelectionAgents: List<String> = emptyList(), val sessionRenameEnabled: Boolean = false, val desktopHandoffEnabled: Boolean = false, val structuredHistoryEnabled: Boolean = false, val activityTimelineEnabled: Boolean = false, val permissionMode: String = "normal", val canControl: Boolean = true, val lastUpdatedAt: String? = null, val stale: Boolean = false, val usage: List<ProviderUsage> = emptyList(), val questionSelectionEnabled: Boolean = false)
 @Serializable data class RemoteDirectory(val name: String, val path: String)
 @Serializable data class DirectoryListing(val home: String, val current: String, val parent: String? = null, val directories: List<RemoteDirectory> = emptyList(), val recent: List<RemoteDirectory> = emptyList(), val nextCursor: String? = null)
@@ -131,24 +162,11 @@ class Bridge(
             refreshCredentials(resolved).let { fresh -> execute(request(path, fresh, query).build(), requestClient, fresh) }
         }
     }
-    private suspend fun execute(req: Request, http: OkHttpClient = client, auth: Credentials = credentials): JsonObject {
+    /** The single choke point for laptop and portal RPCs: network, relay crypto and JSON parsing never run on the caller's dispatcher. */
+    private suspend fun execute(req: Request, http: OkHttpClient = client, auth: Credentials = credentials): JsonObject = withContext(Dispatchers.IO) {
         val response = if (auth.relayLaptopId != null || auth.relayPublicKey != null) RelayTransport.execute(http, req, auth)
             else executeNetwork(http, req)
-        return withContext(Dispatchers.IO) {
-            response.use {
-                val raw = it.body?.string().orEmpty()
-                val parsed = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrDefault(buildJsonObject {})
-                if (!it.isSuccessful) {
-                    val error = parsed["error"] as? JsonObject
-                    val message = error?.get("message")?.jsonPrimitive?.contentOrNull
-                    throw BridgeHttpException(it.code, message ?: "Server returned HTTP ${it.code}. Check the address and pairing.",
-                        error?.get("code")?.jsonPrimitive?.contentOrNull,
-                        error?.get("operationId")?.jsonPrimitive?.contentOrNull,
-                        error?.get("operationStatus")?.jsonPrimitive?.contentOrNull)
-                }
-                parsed
-            }
-        }
+        response.use { parseBridgeResponse(it) }
     }
     suspend fun upload(paneId: String, file: DraftAttachment, resolver: ContentResolver): String {
         if (credentials.relayLaptopId != null || credentials.relayPublicKey != null) {
@@ -188,14 +206,18 @@ class Bridge(
         val uploadClient = client.newBuilder().callTimeout(5, TimeUnit.MINUTES).writeTimeout(60, TimeUnit.SECONDS).build()
         return execute(req, uploadClient).getValue("id").jsonPrimitive.content
     }
-    suspend fun directories(path: String? = null, cursor: String? = null) = json.decodeFromJsonElement<DirectoryListing>(call(listOf("v1", "directories"), query = buildMap { path?.let { put("path", it) }; cursor?.let { put("cursor", it) } }))
-    suspend fun paneFiles(paneId: String, directory: String? = null, cursor: String? = null) = parseProjectFiles(
+    suspend fun directories(path: String? = null, cursor: String? = null): DirectoryListing = fetch(DirectoryListing.serializer(), listOf("v1", "directories"),
+        buildMap { path?.let { put("path", it) }; cursor?.let { put("cursor", it) } })
+    suspend fun paneFiles(paneId: String, directory: String? = null, cursor: String? = null) = withContext(Dispatchers.IO) { parseProjectFiles(
         call(listOf("v1", "panes", paneId, "files"), query = buildMap {
             directory?.let { put("directory", it) }
             cursor?.let { put("cursor", it) }
-        }))
-    suspend fun snapshot() = json.decodeFromJsonElement<Snapshot>(call(listOf("v1", "snapshot")))
-    suspend fun output(id: String) = json.decodeFromJsonElement<Output>(call(listOf("v1", "panes", id, "output")))
+        })) }
+    /** Fetch and decode a typed response off the caller's dispatcher. */
+    internal suspend fun <T> fetch(deserializer: DeserializationStrategy<T>, path: List<String>, query: Map<String, String> = emptyMap()): T =
+        withContext(Dispatchers.IO) { json.decodeFromJsonElement(deserializer, call(path, query = query)) }
+    suspend fun snapshot(): Snapshot = fetch(Snapshot.serializer(), listOf("v1", "snapshot"))
+    suspend fun output(id: String): Output = fetch(Output.serializer(), listOf("v1", "panes", id, "output"))
     internal fun events(poller: AdaptivePoller = AdaptivePoller(), urgent: () -> Boolean = { false }) = callbackFlow<Snapshot> {
         val auth = resolveCredentials(credentials)
         if (auth.relayLaptopId != null || auth.relayPublicKey != null) {

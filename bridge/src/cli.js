@@ -6,9 +6,10 @@ import {fileURLToPath} from 'node:url';
 import {createBridge} from './server.js';
 import {Store} from './store.js';
 import {doctor,rollbackInstallation} from './lifecycle.js';
-import {configurationPath} from './configuration.js';
+import {configurationPath,DEFAULT_PORT} from './configuration.js';
 import {setupCompanion,companionConfigPath,pairCompanion} from './companion.js';
 import {startRelay} from './relay.js';
+import {companionVersion} from './version.js';
 import {accessState,setRemoteEnabled,setDeviceMode,setAccountMode} from './access.js';
 import {
   buildPairingPayload,
@@ -124,8 +125,7 @@ async function main() {
     const health=await doctor(config,store,{releaseRoot:root});
     const access=accessState(store);
     const modes=store.read('devices.json',[]).map(device=>access.devices[device.deviceId]||'normal');
-    const packageInfo=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
-    console.log(JSON.stringify({schemaVersion:1,generatedAt:new Date().toISOString(),bridgeVersion:packageInfo.version,localReady:health.localReady,relayConnected:health.relayConnected,sessionOwnership:health.sessionOwnership,remoteEnabled:access.enabled,pairedDeviceCount:modes.length,deviceModes:{observer:modes.filter(mode=>mode==='observer').length,normal:modes.filter(mode=>mode==='normal').length,terminal:modes.filter(mode=>mode==='terminal').length},terminalInputAllowedByConfig:config.allowTerminalInput===true,herdrStartAllowedByConfig:config.allowHerdrStart===true},null,2));
+    console.log(JSON.stringify({schemaVersion:1,generatedAt:new Date().toISOString(),bridgeVersion:companionVersion(),localReady:health.localReady,relayConnected:health.relayConnected,sessionOwnership:health.sessionOwnership,remoteEnabled:access.enabled,pairedDeviceCount:modes.length,deviceModes:{observer:modes.filter(mode=>mode==='observer').length,normal:modes.filter(mode=>mode==='normal').length,terminal:modes.filter(mode=>mode==='terminal').length},terminalInputAllowedByConfig:config.allowTerminalInput===true,herdrStartAllowedByConfig:config.allowHerdrStart===true},null,2));
     return;
   }
   if (command === 'pair') {
@@ -137,7 +137,7 @@ async function main() {
     store.revoke(args[0]);
     console.log('Device revoked.');
   } else if (command === 'serve'||setup?.foreground) {
-    const port = config.port ?? 8787;
+    const port = config.port ?? DEFAULT_PORT;
     if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid port');
     const app = createBridge(config, {store});
     let relay,connected=false,statusTimer;

@@ -179,3 +179,40 @@ test('approval document preserves native form Origin while null-origin and missi
  assert.equal((await s.call('/v1/devices')).headers.get('referrer-policy'),'no-referrer');
  }finally{s.DB.close();}
 });
+test('a handful of IPs cannot lock out device sign-in; per-IP rejections never charge global start budget',async()=>{
+ const s=await setup();try{
+ const start=ip=>s.call('/v1/auth/start','POST',{},{'CF-Connecting-IP':ip});
+ // Eight addresses exceed the old shared cap of 60 starts per ten minutes.
+ for(let ip=1;ip<=8;ip++){for(let i=0;i<10;i++)assert.equal((await start('198.51.100.'+ip)).status,200);for(let i=0;i<5;i++)assert.equal((await start('198.51.100.'+ip)).status,429);}
+ assert.equal((await start('203.0.113.9')).status,200);
+ s.env.EDGE_SIGNUP_LIMIT={limit:async()=>({success:false})};const before=s.DB.sqlite.prepare('SELECT SUM(count) AS n FROM rate_limits').get().n;
+ assert.equal((await start('203.0.113.10')).status,429);
+ assert.equal(s.DB.sqlite.prepare('SELECT SUM(count) AS n FROM rate_limits').get().n,before);
+ }finally{s.DB.close();}
+});
+test('random device codes never charge the global poll budget; edge rejection precedes D1',async()=>{
+ const s=await setup();try{
+ s.env.EDGE_SIGNUP_LIMIT={limit:async()=>({success:true})};
+ for(let i=0;i<20;i++)assert.equal((await s.call('/v1/auth/poll','POST',{deviceCode:('y'.repeat(42)+(i%10))})).status,410);
+ assert.equal(s.DB.sqlite.prepare('SELECT count(*) AS n FROM rate_limits').get().n,0);
+ const login=await s.start();const rows=s.DB.sqlite.prepare('SELECT count(*) AS n FROM rate_limits').get().n;
+ assert.equal((await s.call('/v1/auth/poll','POST',{deviceCode:login.deviceCode})).status,202);
+ // A live code charges its own counter and then the shared circuit-breaker.
+ assert.equal(s.DB.sqlite.prepare('SELECT count(*) AS n FROM rate_limits').get().n,rows+2);
+ s.env.EDGE_SIGNUP_LIMIT={limit:async()=>({success:false})};const prepare=s.DB.prepare;s.DB.prepare=()=>{throw Error('Must not touch D1');};
+ try{assert.equal((await s.call('/v1/auth/poll','POST',{deviceCode:login.deviceCode})).status,429);}finally{s.DB.prepare=prepare;}
+ }finally{s.DB.close();}
+});
+test('unexpected failures log only error class and an identifier-free route; non-sign-in routes stay neutral',async t=>{
+ const s=await setup();try{
+ const logs=[];const original=console.error;console.error=(...args)=>logs.push(args);t.after(()=>{console.error=original;});
+ const id='0b0c6c1e-2f43-4a8e-9a55-5d3f1b1b0a11';
+ s.env.EDGE_RELAY_LIMIT={limit:async()=>({success:true})};s.env.RELAY={getByName(){throw new TypeError('secret-bearing detail');}};
+ const relay=await s.call(`/v1/relay/${id}/rpc`,'POST',{},{Authorization:'Bearer '+'z'.repeat(43)});
+ assert.equal(relay.status,503);const relayBody=await relay.text();assert.doesNotMatch(relayBody,/Sign-in|secret-bearing/);
+ const prepare=s.DB.prepare;s.DB.prepare=()=>{throw new RangeError('owner@example.com credential');};
+ try{const start=await s.call('/v1/auth/start','POST',{});assert.equal(start.status,503);assert.match(await start.text(),/Sign-in is temporarily unavailable/);}finally{s.DB.prepare=prepare;}
+ assert.deepEqual(logs,[['portal_request_failed','/v1/relay/:id/rpc','TypeError'],['portal_request_failed','/v1/auth/start','RangeError']]);
+ assert.doesNotMatch(JSON.stringify(logs),new RegExp(`${id}|owner@|credential|secret|zzzz`));
+ }finally{s.DB.close();}
+});

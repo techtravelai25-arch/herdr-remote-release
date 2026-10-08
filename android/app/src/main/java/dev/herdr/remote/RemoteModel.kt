@@ -17,7 +17,7 @@ data class DraftAttachment(val uri: Uri, val name: String, val size: Long?, val 
 data class RemoteState(
     val url: String = "", val paired: Boolean = false, val snapshot: Snapshot = Snapshot(),
     val accountEmail: String? = null, val signInRequired: Boolean = false, val accountDeletionUncertain: Boolean = false,
-    val devices: List<RemoteDevice> = emptyList(), val login: PendingLogin? = null,
+    val devices: List<RemoteDevice> = emptyList(),
     val signingIn: Boolean = false, val chooseDevice: Boolean = false,
     val emailLogin: PendingEmailLogin? = null, val loginError: String? = null,
     val trustedLaptopIds: Set<String> = emptySet(), val savedLaptops: List<SavedLaptopChoice> = emptyList(),
@@ -30,7 +30,7 @@ data class RemoteState(
   val attachments: Map<String, List<DraftAttachment>> = emptyMap(), val sendingStatus: String? = null,
   val message: String? = null, val selectedId: String? = null, val output: String = "",
   val drafts: Map<String, String> = emptyMap(), val deliveries: Map<String, DeliveryState> = emptyMap(),
-  val sentPrompts: Map<String, List<String>> = emptyMap(),
+  val sentPrompts: Map<String, List<String>> = emptyMap(), val lastPromptAt: Map<String, Long> = emptyMap(),
   val outputTruncated: Boolean = false, val outputRevision: Long = -1,
   val terminalAttachmentId: String? = null, val outputSource: String = "recent_unwrapped",
   val agentModelMenu: CodexModelMenu? = null, val modelMenuPending: Boolean = false, val currentModel: String? = null,
@@ -89,37 +89,30 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
     private val files = RemoteFilesOwner(app, viewModelScope, _state, { bridge }, { connectionGeneration },
         { accountStore.load()?.token })
     private var liveJob: Job? = null
-    private var outputJob: Job? = null
     private var directoriesJob: Job? = null
     private val paneSelection = PaneSelectionLifecycle()
     private val delivery = RemoteDeliveryOwner(_state, recovery, { bridge }, { connectionGeneration },
         paneSelection, { applySnapshot(it) })
-    private var loginJob: Job? = null
     private var foreground = false
     private var outputVisible = false
     private val snapshotPoller = AdaptivePoller()
     private val outputPoller = AdaptivePoller()
-    private var modelMenuRequest: Pair<String, Long>? = null
-    private var dismissedModelMenuId: String? = null
-    private var questionRequest: Pair<String, Long>? = null
-    private var dismissedQuestionId: String? = null
+    private val outputReader = RemoteOutputOwner(viewModelScope, _state, { bridge }, { connectionGeneration }, paneSelection, outputPoller,
+        { foreground }, { outputVisible }, ::pendingAction, { applySnapshot(it) }, { refreshHistoryQuietly() })
+    private val signIn = RemoteSignInOwner(viewModelScope, _state, portal, accountStore, trustedLaptops, ::accountLinkedConnection, ::clearDevice)
+    private val notifications = RemoteNotificationRouter(app, viewModelScope, _state, { bridge }, store, accountStore, trustedLaptops, portal,
+        { credentials, opening -> useCredentials(credentials, opening) }, ::accountLinkedConnection, { select(it) }, { foreground })
     fun outputVisible(visible: Boolean) {
         outputVisible = visible
         if (visible) {
-            outputPoller.reset(); beginOutput()
+            outputPoller.reset(); outputReader.begin()
             if (_state.value.online && _state.value.structuredHistory == null &&
                 _state.value.snapshot.panes.any { it.id == _state.value.selectedId && it.kind != "terminal" }) loadHistory()
         }
-        else { outputJob?.cancel(); outputJob = null }
+        else { outputReader.cancel() }
     }
     private fun wakePolling() { snapshotPoller.reset(); outputPoller.reset() }
     private fun pendingAction(): Boolean = _state.value.busy || _state.value.deliveries.values.any { it.status == "sending" }
-    private fun waitingForModelMenu(id: String?): Boolean = modelMenuRequest?.let { (paneId, startedAt) ->
-        paneId == id && android.os.SystemClock.elapsedRealtime() - startedAt < 30_000
-    } == true
-    private fun waitingForQuestion(id: String?): Boolean = questionRequest?.let { (paneId, startedAt) ->
-        paneId == id && android.os.SystemClock.elapsedRealtime() - startedAt < 30_000
-    } == true
 
     private val connectivity = app.getSystemService(ConnectivityManager::class.java)
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -141,99 +134,16 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         connectivity.unregisterNetworkCallback(networkCallback)
         super.onCleared()
     }
-    private var pendingNotificationPane: String? = null
-    private var notificationJob: Job? = null
-
-    fun cancelNotificationOpening() {
-        notificationJob?.cancel(); notificationJob = null
-        pendingNotificationPane = null
-        _state.update { it.copy(openingNotification = false) }
-    }
-
-    fun openNotificationPane(id: String, deviceId: String? = null, localDeviceId: String? = null) {
-        cancelNotificationOpening()
-        if (id.isBlank() || id.length > 256 || id.any { it.code < 0x20 || it.code == 0x7f }) return
-        if (localDeviceId != null && !localDeviceId.matches(Regex("[A-Za-z0-9_-]{1,80}"))) return
-        if (deviceId != null && !deviceId.matches(Regex("[A-Za-z0-9_-]{1,80}"))) return
-        _state.update { it.copy(openingNotification = true, loadingInitialConnection = false) }
-        notificationJob = viewModelScope.launch {
-            try {
-                withTimeout(20_000) {
-                    if (localDeviceId != null && localDeviceId != bridge?.credentials?.deviceId) {
-                        val credentials = selectTrustedLaptop(trustedLaptops.all(), localDeviceId, accountStore.load()).credentials
-                        withContext(Dispatchers.IO) { ensureActive(); store.save(credentials) }
-                        useCredentials(credentials, openingNotification = true)
-                    }
-                    if (deviceId != null && deviceId != bridge?.credentials?.portalDeviceId) {
-                        if (accountStore.load() == null) throw PortalSignInRequired()
-                        val registry = portal.devices().also { devices -> _state.update { it.copy(devices = devices) } }
-                        check(registry.any { it.id == deviceId }) { "That laptop is no longer available." }
-                        val remote = registry.first { it.id == deviceId }
-                        val credentials = if (remote.transport == "relay" || trustedLaptops.find(deviceId, accountStore.load()) != null) validateTrustedLaptop(
-                            trustedLaptops.find(deviceId, accountStore.load()) ?: error("Scan this laptop’s QR code before opening its notifications."), accountStore.load()).copy(portalDeviceId = deviceId)
-                            else portal.grant(deviceId)
-                        withContext(Dispatchers.IO) {
-                            ensureActive()
-                            store.save(credentials)
-                        }
-                        currentCoroutineContext().ensureActive()
-                        useCredentials(credentials, openingNotification = true)
-                    }
-                    check(bridge != null) { "Connect your laptop to open this conversation." }
-                    if (_state.value.signInRequired && accountLinkedConnection()) throw PortalSignInRequired()
-                    pendingNotificationPane = id
-                    openPendingNotificationPane()
-                    state.first { !it.openingNotification }
-                }
-            } catch (error: TimeoutCancellationException) {
-                pendingNotificationPane = null
-                _state.update { it.copy(openingNotification = false, message = "Could not open the conversation. Check your connection and try the notification again.") }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                pendingNotificationPane = null
-                _state.update { it.copy(openingNotification = false,
-                    signInRequired = it.signInRequired || error is PortalSignInRequired,
-                    message = error.message ?: "That conversation could not be opened.") }
-            }
-        }
-    }
-    private fun openPendingNotificationPane() {
-        val id = pendingNotificationPane ?: return
-        when (notificationPaneResolution(id, _state.value.online, _state.value.snapshot)) {
-            NotificationPaneResolution.WAIT -> return
-            NotificationPaneResolution.OPEN -> select(id)
-            NotificationPaneResolution.CLOSED -> _state.update { it.copy(message = "That reply pane has closed.") }
-        }
-        pendingNotificationPane = null
-        _state.update { it.copy(openingNotification = false) }
-    }
+    fun cancelNotificationOpening() = notifications.cancelNotificationOpening()
+    fun openNotificationPane(id: String, deviceId: String? = null, localDeviceId: String? = null) =
+        notifications.openNotificationPane(id, deviceId, localDeviceId)
     fun clearMessage() { _state.update { it.copy(message = null) } }
     fun updateDraft(id: String, text: String) {
         if (id.isBlank() || text.length > 16000) return
         _state.update { current -> current.copy(drafts = current.drafts + (id to text)) }
         schedulePersist()
     }
-    fun setCloudPushEnabled(enabled: Boolean) = action {
-        val app = getApplication<Application>()
-        if (enabled) {
-            _state.update { it.copy(cloudPushStatus = "Cloud push is registering") }
-            try {
-                CloudPush.enable(app)
-                ReplyNotifications.setEnabled(app, false)
-                app.stopService(android.content.Intent(app, ReplyNotificationService::class.java))
-                _state.update { it.copy(cloudPushEnabled = true, cloudPushStatus = "Cloud push is on", notificationsEnabled = false) }
-            } catch (error: Exception) {
-                CloudPush.disableLocally(app)
-                _state.update { it.copy(cloudPushEnabled = false, cloudPushStatus = "Cloud push needs setup", message = error.message ?: "Cloud push could not be enabled.") }
-                throw error
-            }
-        } else {
-            runCatching { CloudPush.disable(app) }.getOrElse { CloudPush.disableLocally(app) }
-            _state.update { it.copy(cloudPushEnabled = false, cloudPushStatus = "Cloud push is off") }
-            if (foreground) refreshReplyNotifications()
-        }
-    }
+    fun setCloudPushEnabled(enabled: Boolean) = action { notifications.setCloudPushEnabled(enabled) }
     fun loadDiagnostics() = action {
         val api = requireBridge(); val generation = connectionGeneration
         _state.update { it.copy(diagnosticsLoading = true) }
@@ -297,6 +207,20 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         finally { if (current()) _state.update { it.copy(reviewLoading = false) } }
     }
     fun openArtifact(id: String) = action { files.openArtifact(id) }
+
+    internal fun htmlPreviewSource(): HtmlPreviewSource {
+        val api = requireNotNull(bridge) { "Connect to your laptop to open this page." }
+        val current = _state.value
+        val paneId = requireNotNull(current.selectedId) { "Open this page from its conversation." }
+        check(current.online && current.snapshot.herdrOnline && !current.snapshot.stale) { "Reconnect to your laptop to open this page." }
+        val generation = connectionGeneration
+        val selection = paneSelection.generation
+        return HtmlPreviewSource(api, paneId) {
+            val latest = _state.value
+            generation == connectionGeneration && api === bridge && selection == paneSelection.generation &&
+                latest.selectedId == paneId && latest.online && latest.snapshot.herdrOnline && !latest.snapshot.stale
+        }
+    }
     /** Bind the system document picker to the laptop, account and pane offering the file. */
     fun prepareArtifactSave(id: String, suggestedName: String): String? = files.prepareArtifactSave(id, suggestedName)
     fun completeArtifactSave(destination: Uri?) = files.completeArtifactSave(destination)
@@ -304,30 +228,8 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         val generation = connectionGeneration; val value = api.call(listOf("v1", "attachments"))
         if (generation == connectionGeneration && api === bridge) _state.update { it.copy(attachmentStorage = value) }
     }
-    fun setReplyNotifications(enabled: Boolean) {
-        val app = getApplication<Application>()
-        if (enabled && (!ReplyNotifications.hasPermission(app) || bridge == null)) {
-            _state.update { it.copy(message = "Allow notifications and pair your laptop to enable reply alerts.") }
-            return
-        }
-        if (enabled && CloudPush.enabled(app)) {
-            CloudPush.disableLocally(app)
-            _state.update { it.copy(cloudPushEnabled = false, cloudPushStatus = "Cloud push is off") }
-            viewModelScope.launch { runCatching { CloudPush.disable(app) } }
-        }
-        try {
-            ReplyNotifications.setEnabled(app, enabled)
-            _state.update { it.copy(notificationsEnabled = enabled) }
-        } catch (_: Exception) {
-            ReplyNotifications.setEnabled(app, false)
-            _state.update { it.copy(notificationsEnabled = false, message = "Could not start reply alerts. Reopen the app and try again.") }
-        }
-    }
-    fun refreshReplyNotifications() {
-        val app = getApplication<Application>()
-        val enabled = ReplyNotifications.enabled(app) && ReplyNotifications.hasPermission(app) && bridge != null
-        setReplyNotifications(enabled)
-    }
+    fun setReplyNotifications(enabled: Boolean) = notifications.setReplyNotifications(enabled)
+    fun refreshReplyNotifications() = notifications.refreshReplyNotifications()
     fun foreground(active: Boolean) {
         if (active && !CloudPush.enabled(getApplication())) refreshReplyNotifications()
         if (active && CloudPush.enabled(getApplication())) CloudPush.scheduleRegistration(getApplication())
@@ -335,14 +237,14 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         foreground = active
         wakePolling()
         liveJob?.cancel(); liveJob = null
-        outputJob?.cancel(); outputJob = null
+        outputReader.cancel()
         if (active && bridge != null) {
             liveJob = viewModelScope.launch {
                 val generation = connectionGeneration; val localBridge = bridge
                 reconnectContinuously(disconnected = { error ->
                     if (generation == connectionGeneration && localBridge === bridge) {
                         val notificationSignInFailed = error is PortalSignInRequired && _state.value.openingNotification
-                        if (notificationSignInFailed) pendingNotificationPane = null
+                        if (notificationSignInFailed) notifications.pendingNotificationPane = null
                         _state.update { it.copy(online = false, live = false, terminalAttachmentId = null, loadingInitialConnection = false,
                             openingNotification = it.openingNotification && !notificationSignInFailed,
                             message = if (notificationSignInFailed) error?.message ?: "Sign in again to open this conversation." else it.message,
@@ -358,7 +260,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
                     api.events(snapshotPoller, ::pendingAction).collect { next -> if (generation == connectionGeneration && api === bridge) { connected(); applySnapshot(next, live = true) } }
                 }
             }
-            beginOutput()
+            outputReader.begin()
         } else _state.update { it.copy(online = false, live = false, terminalAttachmentId = null) }
     }
     fun reconnect() {
@@ -370,96 +272,10 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         val credentials = bridge?.credentials ?: return false
         return credentials.portalDeviceId != null || credentials.relayLaptopId?.let { trustedLaptops.findCredentials(credentials)?.accountEmail } != null
     }
-    fun startEmailSignIn(rawEmail: String) {
-        if (_state.value.signingIn || _state.value.busy) return
-        val email = rawEmail.trim()
-        if (email.length > 254 || !email.matches(Regex("[^\\s@]+@[^\\s@]+\\.[^\\s@]+"))) {
-            _state.update { it.copy(loginError = "Enter a valid email address.") }; return
-        }
-        _state.update { it.copy(signingIn = true, loginError = null) }
-        loginJob = viewModelScope.launch {
-            try {
-                val challenge = portal.startEmail(email)
-                val now = System.currentTimeMillis() / 1000
-                _state.update { it.copy(emailLogin = PendingEmailLogin(email, challenge.challengeId, now + challenge.expiresIn, now + challenge.resendAfter)) }
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { _state.update { it.copy(loginError = e.message ?: "Could not send your code. Try again.") } }
-            finally { _state.update { it.copy(signingIn = false) } }
-        }
-    }
-    fun verifyEmailSignIn(code: String) {
-        val pending = _state.value.emailLogin ?: return
-        if (_state.value.signingIn) return
-        if (!code.matches(Regex("[0-9]{6}"))) { _state.update { it.copy(loginError = "Enter the six-digit code from your email.") }; return }
-        _state.update { it.copy(signingIn = true, loginError = null) }
-        loginJob = viewModelScope.launch {
-            try {
-                val session = portal.verifyEmail(pending.challengeId, code)
-                if (accountLinkedConnection()) { clearDevice(); _state.update { it.copy(signingIn = true) } }
-                withContext(Dispatchers.IO) { accountStore.save(session) }
-                _state.update { it.copy(accountEmail = session.email, signInRequired = false, emailLogin = null,
-                    chooseDevice = true, devices = emptyList()) }
-                claimPendingLaptops(session.email)
-                val devices = portal.devices()
-                _state.update { it.copy(devices = devices, trustedLaptopIds = accessibleLaptops(trustedLaptops.all(), accountStore.load()).mapNotNull { entry -> entry.credentials.relayLaptopId }.toSet()) }
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { _state.update { it.copy(loginError = e.message ?: "Could not verify this code. Try again.",
-                message = if (it.accountEmail != null && !it.signInRequired) "Signed in. Could not refresh laptops; tap Refresh laptops to try again." else it.message) } }
-            finally { _state.update { it.copy(signingIn = false) } }
-        }
-    }
-    private suspend fun claimPendingLaptops(email: String) {
-        val session = validAccount(accountStore.load())?.takeIf { it.email.equals(email, true) } ?: return
-        for (entry in trustedLaptops.all()) {
-            if (!Deployment.isPortalOrigin(entry.credentials.url)) continue
-            val claim = entry.claimToken ?: continue
-            if (entry.accountEmail != null && !entry.accountEmail.equals(email, true)) continue
-            try {
-                check(accountStore.load() == session) { "Your account changed. Refresh laptops." }
-                portal.claim(entry.credentials.relayLaptopId!!, claim)
-                synchronized(CredentialStorageLock.monitor) {
-                    check(validAccount(accountStore.load()) == session) { "Your account changed. Refresh laptops." }
-                    trustedLaptops.save(entry.copy(claimToken = null, accountEmail = email))
-                }
-            } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { _state.update { it.copy(message = "Laptop connected privately. Account linking is pending; refresh laptops to try again.") } }
-        }
-    }
-    fun signIn(openBrowser: (String) -> Unit) {
-        if (_state.value.signingIn || _state.value.busy) return
-        _state.update { it.copy(signingIn = true, login = null) }
-        loginJob = viewModelScope.launch {
-            try {
-                val challenge = portal.start()
-                _state.update { it.copy(login = PendingLogin(challenge.userCode, challenge.verificationUrl)) }
-                openBrowser(challenge.verificationUrl)
-                val deadline = android.os.SystemClock.elapsedRealtime() + challenge.expiresIn * 1000
-                while (isActive && android.os.SystemClock.elapsedRealtime() < deadline) {
-                    delay(challenge.interval * 1000)
-                    val session = try { portal.poll(challenge.deviceCode) }
-                    catch (network: java.io.IOException) {
-                        if (network is BridgeHttpException && network.statusCode !in listOf(408, 429) && network.statusCode < 500) throw network
-                        continue
-                    } ?: continue
-                    // A fresh account sign-in must never inherit another session's bridge grant.
-                    if (accountLinkedConnection()) {
-                        clearDevice()
-                        _state.update { it.copy(signingIn = true) }
-                    }
-                    withContext(Dispatchers.IO) { accountStore.save(session) }
-                    _state.update { it.copy(accountEmail = session.email, signInRequired = false,
-                        login = null, chooseDevice = true, devices = emptyList()) }
-                    val devices = portal.devices()
-                    _state.update { it.copy(devices = devices, message = "Signed in. Choose your laptop.") }
-                    return@launch
-                }
-                _state.update { it.copy(message = "Sign-in expired. Start again to get a new code.") }
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { _state.update { it.copy(message = error.message ?: "Could not sign in. Try again.", signInRequired = it.signInRequired || error is PortalSignInRequired) } }
-            finally { _state.update { it.copy(signingIn = false, login = null, emailLogin = null, loginError = null) } }
-        }
-    }
-    fun cancelSignIn() { loginJob?.cancel(); loginJob = null; _state.update { it.copy(signingIn = false, login = null, emailLogin = null, loginError = null) } }
+    fun startEmailSignIn(rawEmail: String) = signIn.startEmailSignIn(rawEmail)
+    fun verifyEmailSignIn(code: String) = signIn.verifyEmailSignIn(code)
+    private suspend fun claimPendingLaptops(email: String) = signIn.claimPendingLaptops(email)
+    fun cancelSignIn() = signIn.cancelSignIn()
     fun refreshSavedLaptops() {
         val account = accountStore.load()
         val entries = accessibleLaptops(trustedLaptops.all(), account)
@@ -552,7 +368,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         else {
             CloudPush.disableLocally(getApplication())
             clearPrivateState(clearStore = true)
-            _state.update { it.copy(drafts = emptyMap(), deliveries = emptyMap(), sentPrompts = emptyMap(), attachments = emptyMap(),
+            _state.update { it.copy(drafts = emptyMap(), deliveries = emptyMap(), sentPrompts = emptyMap(), lastPromptAt = emptyMap(), attachments = emptyMap(),
                 output = "", outputTruncated = false,
                 attachmentStorage = null, review = null, structuredHistory = null, activity = null,
                 projectFiles = null, projectFilesLoading = false, projectFilesError = null, projectFilesRequestedPath = null, projectFilesRequestedCursor = null) }
@@ -583,7 +399,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         val scope = connectionScope(credentials)
         val archive = recovery.load(scope)
         val scoped = archive.entries.filter { it.scope == scope }
-        pendingNotificationPane = null
+        notifications.pendingNotificationPane = null
         _state.update { RemoteState(url = credentials.url, paired = true, portalDeviceId = credentials.portalDeviceId,
             openingNotification = openingNotification,
             accountEmail = it.accountEmail, signInRequired = it.signInRequired, devices = it.devices,
@@ -659,7 +475,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
     private fun clearDevice() {
         cancelNotificationOpening()
         val wasForeground = foreground
-        pendingNotificationPane = null
+        notifications.pendingNotificationPane = null
         setReplyNotifications(false)
         foreground(false); store.clear(); bridge = null
         connectionGeneration++
@@ -682,12 +498,34 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         _state.update { it.copy(historyLoading = true, historyError = null) }
         viewModelScope.launch {
             try {
-                val result = Bridge.json.decodeFromJsonElement<StructuredHistory>(api.call(listOf("v1", "panes", id, "history"), query = cursor?.let { mapOf("cursor" to it) } ?: emptyMap()))
-                if (generation == connectionGeneration && selectionGeneration == paneSelection.generation && _state.value.selectedId == id) _state.update { it.copy(structuredHistory = if (earlier) prependHistory(result, it.structuredHistory) else result) }
+                val result = api.fetch(StructuredHistory.serializer(), listOf("v1", "panes", id, "history"), cursor?.let { mapOf("cursor" to it) } ?: emptyMap())
+                if (generation == connectionGeneration && selectionGeneration == paneSelection.generation && _state.value.selectedId == id) _state.update { it.copy(structuredHistory = if (earlier) prependHistory(result, it.structuredHistory) else mergeLatestHistory(it.structuredHistory, result)) }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (generation == connectionGeneration && selectionGeneration == paneSelection.generation && _state.value.selectedId == id) _state.update { it.copy(historyError = if (e is BridgeHttpException && e.statusCode == 404) "Update the laptop bridge to read conversation history." else e.message ?: "Could not load history. Try again.") } }
             finally { if (generation == connectionGeneration && selectionGeneration == paneSelection.generation && _state.value.selectedId == id) _state.update { it.copy(historyLoading = false) } }
         }
+    }
+    private var quietHistoryAt = 0L
+    /** Poll for newly written messages without a spinner. The bridge answers `unchanged` while the transcript is idle. */
+    private suspend fun refreshHistoryQuietly() {
+        val before = _state.value
+        val id = before.selectedId ?: return
+        val api = bridge ?: return
+        if (!before.online || before.historyLoading || before.snapshot.panes.none { it.id == id && it.kind != "terminal" }) return
+        val current = before.structuredHistory
+        val now = android.os.SystemClock.elapsedRealtime()
+        // A conversation the laptop cannot identify yet is retried slowly; a readable one on every output poll.
+        if (current?.available == false && now - quietHistoryAt < 6_000) return
+        quietHistoryAt = now
+        val generation = connectionGeneration
+        val selectionGeneration = paneSelection.generation
+        val query = current?.takeIf { it.available }?.revision?.let { mapOf("revision" to it) } ?: emptyMap()
+        val result = try {
+            api.fetch(StructuredHistory.serializer(), listOf("v1", "panes", id, "history"), query)
+        } catch (e: CancellationException) { throw e } catch (_: Exception) { return }
+        if (result.unchanged) return
+        if (generation != connectionGeneration || selectionGeneration != paneSelection.generation) return
+        _state.update { if (it.selectedId == id) it.copy(structuredHistory = mergeLatestHistory(it.structuredHistory, result)) else it }
     }
     fun loadActivity() {
         if (_state.value.activityLoading) return
@@ -696,7 +534,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         _state.update { it.copy(activityLoading = true, activityError = null) }
         viewModelScope.launch {
             try {
-                val result = Bridge.json.decodeFromJsonElement<ActivityTimeline>(api.call(listOf("v1", "activity")))
+                val result = api.fetch(ActivityTimeline.serializer(), listOf("v1", "activity"))
                 if (generation == connectionGeneration) _state.update { it.copy(activity = result) }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (generation == connectionGeneration) _state.update { it.copy(activityError = if (e is BridgeHttpException && e.statusCode == 404) "Update the laptop bridge to see activity." else e.message ?: "Could not load activity. Try again.") } }
@@ -708,7 +546,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         val next = api.snapshot()
         if (generation != connectionGeneration || api !== bridge) return@action
         applySnapshot(next)
-        if (_state.value.selectedId != null && next.herdrOnline) readOutput()
+        if (_state.value.selectedId != null && next.herdrOnline) outputReader.read()
     }
 
     /** Browse one bounded page of the selected session's project files, optionally continuing a cursor. */
@@ -735,13 +573,13 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         val nextSelection = paneSelection.reconcile(selected, next)
         val closed = selected != null && nextSelection == null
         if (closed || !next.herdrOnline || next.stale) {
-            modelMenuRequest = null
-            dismissedModelMenuId = null
-            questionRequest = null
-            dismissedQuestionId = null
+            outputReader.modelMenuRequest = null
+            outputReader.dismissedModelMenuId = null
+            outputReader.questionRequest = null
+            outputReader.dismissedQuestionId = null
         }
-        if (closed) { outputJob?.cancel(); outputJob = null }
-        val attention = next.panes.filter { it.kind != "terminal" && it.status in setOf("blocked", "needs_input", "error") }.map { it.id }.toSet()
+        if (closed) { outputReader.cancel() }
+        val attention = next.panes.filter { it.hasUnacknowledgedAttention() }.map { it.id }.toSet()
         val unread = attentionTracker.accept(next, selected)
         _state.update { it.copy(snapshot = next, online = true, live = live, loadingInitialConnection = false, connectionError = next.error,
             selectedId = if (closed) null else it.selectedId,
@@ -749,6 +587,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
             review = if (closed) null else it.review,
             reviewLoading = !closed && it.reviewLoading,
             sentPrompts = it.sentPrompts.filterKeys { id -> next.panes.any { pane -> pane.id == id } },
+            lastPromptAt = it.lastPromptAt.filterKeys { id -> next.panes.any { pane -> pane.id == id } },
             question = if (closed || !next.herdrOnline || next.stale) null else it.question,
             questionReviewAvailable = !closed && next.herdrOnline && !next.stale && it.questionReviewAvailable,
             questionPending = !closed && next.herdrOnline && !next.stale && it.questionPending,
@@ -765,107 +604,28 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
             previous.panes.find { it.id == selected }?.status in setOf("working", "running", "starting") &&
             next.panes.find { it.id == selected }?.status in setOf("idle", "done") &&
             !_state.value.historyLoading) loadHistory()
-        openPendingNotificationPane()
+        notifications.openPendingNotificationPane()
         if (closed) schedulePersist()
         // Resume output polling only when live membership returns after an outage.
         val restored = !previous.herdrOnline || previous.stale || previous.panes.none { it.id == selected }
-        if (restored && next.herdrOnline && !next.stale && next.panes.any { it.id == _state.value.selectedId } && outputJob?.isActive != true) beginOutput()
+        if (restored && next.herdrOnline && !next.stale && next.panes.any { it.id == _state.value.selectedId } && !outputReader.active) outputReader.begin()
     }
     fun select(id: String?) {
         if (id != null && _state.value.snapshot.panes.none { it.id == id }) return
-        modelMenuRequest = null
-        dismissedModelMenuId = null
+        outputReader.modelMenuRequest = null
+        outputReader.dismissedModelMenuId = null
         wakePolling()
         files.clearProjectFiles()
         _state.update { it.copy(review = null, reviewLoading = false,
             structuredHistory = null, historyLoading = false, historyError = null) }
         paneSelection.selected()
         if (id != null) attentionTracker.read(id)
-        questionRequest = null
-        dismissedQuestionId = null
+        outputReader.questionRequest = null
+        outputReader.dismissedQuestionId = null
         _state.update { it.copy(selectedId = id, question = null, questionReviewAvailable = false, questionPending = false, agentModelMenu = null, modelMenuPending = false, currentModel = null, outputReady = id == null, output = "", outputTruncated = false, outputRevision = -1, terminalAttachmentId = null, unreadIds = id?.let { pane -> it.unreadIds - pane } ?: it.unreadIds) }
-        outputJob?.cancel(); outputJob = null; beginOutput()
+        outputReader.cancel(); outputReader.begin()
         if (id != null && outputVisible && _state.value.online &&
             _state.value.snapshot.panes.any { it.id == id && it.kind != "terminal" }) loadHistory()
-    }
-    private fun beginOutput() {
-        if (!foreground || !outputVisible || _state.value.selectedId == null || outputJob?.isActive == true) return
-        outputJob = viewModelScope.launch {
-            var failures = 0
-            while (isActive && _state.value.selectedId != null) {
-                if (!_state.value.online || !_state.value.snapshot.herdrOnline) { delay(1500); continue }
-                try { readOutput(); failures = 0 }
-                catch (e: CancellationException) { throw e }
-                catch (e: Exception) {
-                    failures = (failures + 1).coerceAtMost(5)
-                    if (e is BridgeHttpException) {
-                        // Refresh membership so a closed pane cannot keep polling forever.
-                        try { applySnapshot(requireBridge().snapshot()) }
-                        catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) { /* The next live reconnect will refresh membership. */ }
-                        // Reconciliation may have selected a replacement and canceled this reader.
-                        currentCoroutineContext().ensureActive()
-                        if (_state.value.selectedId == null) break
-                        val transient = shouldRetryPaneOutput(e, _state.value.selectedId, _state.value.snapshot)
-                        if (failures == 1) _state.update { it.copy(message = "${e.message ?: "Output unavailable."}${if (transient) " Retrying automatically." else " Reopen the pane to retry."}") }
-                        if (!transient) break
-                    } else if (failures == 1) _state.update { it.copy(message = "Cannot reach terminal output. Retrying automatically.") }
-                }
-                if (failures == 0) {
-                    val state = _state.value
-                    val pane = state.snapshot.panes.find { it.id == state.selectedId }
-                    outputPoller.pause(listOf(state.selectedId, state.output, state.terminalAttachmentId),
-                        pane?.status in setOf("working", "running", "starting", "blocked", "needs_input", "needs-input") ||
-                            pendingAction() || waitingForModelMenu(state.selectedId))
-                } else delay((1000L shl failures) + Random.nextLong(1000))
-            }
-        }
-    }
-    private suspend fun readOutput() {
-        val id = _state.value.selectedId ?: return
-        val api = requireBridge(); val generation = connectionGeneration
-        val selectionGeneration = paneSelection.generation
-        val result = api.output(id)
-        if (generation != connectionGeneration || api !== bridge) return
-        if (selectionGeneration != paneSelection.generation) return
-        val before = _state.value
-        if (before.selectedId != id || !before.online || !before.snapshot.herdrOnline || before.snapshot.stale ||
-            !acceptTerminalOutput(before.terminalAttachmentId, before.outputRevision, result.attachmentId, result.revision)) return
-        val attachmentChanged = before.terminalAttachmentId != null && before.terminalAttachmentId != result.attachmentId
-        if (attachmentChanged) {
-            modelMenuRequest = null
-            dismissedModelMenuId = null
-            questionRequest = null
-            dismissedQuestionId = null
-        }
-        val waiting = waitingForModelMenu(id)
-        val menu = result.agentModelMenu?.takeIf { it.isValid() && it.id != dismissedModelMenuId &&
-            !attachmentChanged && (waiting || before.agentModelMenu != null) }
-        if (menu != null) modelMenuRequest = id to android.os.SystemClock.elapsedRealtime()
-        if (menu == null && !waiting && modelMenuRequest?.first == id) modelMenuRequest = null
-        val observedQuestion = result.question?.takeIf { before.snapshot.questionSelectionEnabled && it.isValid() && !attachmentChanged && menu == null }
-        val oldQuestion = observedQuestion != null && observedQuestion.id == dismissedQuestionId
-        val question = observedQuestion?.takeUnless { oldQuestion }
-        val waitingQuestion = before.snapshot.questionSelectionEnabled && !attachmentChanged &&
-            (result.questionAwaitingTransition || oldQuestion ||
-                (waitingForQuestion(id) && question == null && result.questionReviewAvailable))
-        if (!waitingQuestion) questionRequest = null
-        if (!waitingQuestion && !oldQuestion) dismissedQuestionId = null
-        _state.update { current ->
-            if (current.selectedId != id || !current.online || !current.snapshot.herdrOnline || current.snapshot.stale ||
-                !acceptTerminalOutput(current.terminalAttachmentId, current.outputRevision, result.attachmentId, result.revision)) current
-            else current.copy(output = result.text, outputReady = true, outputTruncated = result.truncated,
-                outputRevision = result.revision, outputSource = result.source, terminalAttachmentId = result.attachmentId,
-                question = question, questionReviewAvailable = current.snapshot.questionSelectionEnabled && !attachmentChanged && result.questionReviewAvailable && menu == null,
-                questionPending = waitingQuestion,
-                currentModel = null, agentModelMenu = menu,
-                modelMenuPending = current.modelMenuPending && waiting && menu == null,
-                message = if (attachmentChanged && (current.modelMenuPending || current.agentModelMenu != null))
-                    "The terminal changed. Reopen its model choices after refreshing."
-                else if (!waiting && current.modelMenuPending) "Model choices did not appear. Check the terminal before trying again."
-                else if (!waitingQuestion && current.questionPending && question == null) "The question is no longer visible. Check the terminal before trying again."
-                else current.message)
-        }
     }
     fun addAttachments(id: String, uris: List<Uri>) = action {
         requireAttachments(id)
@@ -904,7 +664,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
             val same = delivery.finishPrompt(id, operationId, submittedDraft)
             if (same) onSent()
             loadHistory()
-            if (_state.value.selectedId == id) runCatching { readOutput() }.onFailure { if (it is CancellationException) throw it }
+            if (_state.value.selectedId == id) runCatching { outputReader.read() }.onFailure { if (it is CancellationException) throw it }
         } catch (error: CancellationException) { throw error
         } catch (error: Exception) {
             if (generation != connectionGeneration || api !== bridge) return@action
@@ -922,7 +682,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
             require(requireTerminalAttachment(paneId) == attachmentId) { "The terminal changed. Refresh it before sending." }
             api.call(listOf("v1", "panes", paneId, "keys"), "POST", buildJsonObject { put("attachmentId", attachmentId); putJsonArray("keys") { add(key) } }, operation)
             if (generation != connectionGeneration || api !== bridge) return@action
-            setDelivery(paneId, operation, "delivered", "Key dispatch acknowledged. Check the terminal.", operation = "keys"); runCatching { readOutput() }.onFailure { if (it is CancellationException) throw it }
+            setDelivery(paneId, operation, "delivered", "Key dispatch acknowledged. Check the terminal.", operation = "keys"); runCatching { outputReader.read() }.onFailure { if (it is CancellationException) throw it }
         } catch (error: CancellationException) { throw error
         } catch (error: Exception) { if (generation != connectionGeneration || api !== bridge) return@action; setDelivery(paneId, operation, if (isUncertain(error)) "uncertain" else "failed", if (isUncertain(error)) "Delivery is uncertain. Inspect the pane before retrying." else (error.message ?: "Key delivery failed."), operation = "keys"); throw error }
     }
@@ -944,7 +704,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
             setDelivery(paneId, operation, "delivered", "Text dispatch acknowledged. Check the terminal.", operation = "input")
             _state.update { current -> if (current.drafts[paneId] == text) current.copy(drafts = current.drafts - paneId) else current }
             schedulePersist()
-            runCatching { readOutput() }.onFailure { if (it is CancellationException) throw it }
+            runCatching { outputReader.read() }.onFailure { if (it is CancellationException) throw it }
         } catch (error: CancellationException) { throw error
         } catch (error: Exception) {
             if (generation != connectionGeneration || api !== bridge) return@action
@@ -1001,14 +761,14 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
             if (generation != connectionGeneration || api !== bridge) return@action
             setDelivery(paneId, receipt, "delivered", "Question action dispatched. Check the terminal.", operation = "question.$operation")
             if (_state.value.selectedId != paneId || paneSelection.generation != navigation) return@action
-            questionRequest = paneId to android.os.SystemClock.elapsedRealtime()
-            dismissedQuestionId = questionId
+            outputReader.questionRequest = paneId to android.os.SystemClock.elapsedRealtime()
+            outputReader.dismissedQuestionId = questionId
             _state.update { it.copy(question = null, questionReviewAvailable = false, questionPending = true) }
-            runCatching { readOutput() }.onFailure { if (it is CancellationException) throw it }
+            runCatching { outputReader.read() }.onFailure { if (it is CancellationException) throw it }
         } catch (error: CancellationException) { throw error
         } catch (error: Exception) {
             if (generation != connectionGeneration || api !== bridge) return@action
-            questionRequest = null
+            outputReader.questionRequest = null
             _state.update { if (it.selectedId == paneId && paneSelection.generation == navigation)
                 it.copy(question = null, questionReviewAvailable = false, questionPending = false) else it }
             val uncertain = dispatchStarted && isUncertain(error)
@@ -1054,8 +814,8 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
     fun cancelAgentModelMenu(menuId: String) = agentModelAction("model-cancel", menuId)
     fun agentModelKey(menuId: String, key: String) = agentModelAction("model-key", menuId, key = key)
     fun dismissAgentModelMenuLocally() {
-        dismissedModelMenuId = _state.value.agentModelMenu?.id
-        modelMenuRequest = null
+        outputReader.dismissedModelMenuId = _state.value.agentModelMenu?.id
+        outputReader.modelMenuRequest = null
         _state.update { it.copy(agentModelMenu = null, modelMenuPending = false,
             message = "Model menu dismissed on phone. Check the terminal before sending other input.") }
     }
@@ -1071,7 +831,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         }
         val attachmentId = requireTerminalAttachment(id)
         if (menuId == null) {
-            if (current.agentModelMenu != null || current.modelMenuPending) { readOutput(); return@action }
+            if (current.agentModelMenu != null || current.modelMenuPending) { outputReader.read(); return@action }
             require(pane?.status in setOf("idle", "done") && current.question == null && !current.questionReviewAvailable && !current.questionPending) { "Wait for the agent to finish or answer its question before changing models." }
         }
         else {
@@ -1094,13 +854,13 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
             dispatchStarted = true
             api.call(listOf("v1", "panes", id, operation), "POST", body, receipt)
             if (generation != connectionGeneration || api !== bridge || _state.value.selectedId != id) return@action
-            if (operation == "model" || operation == "model-key") dismissedModelMenuId = null
-            else dismissedModelMenuId = menuId
-            modelMenuRequest = if (operation == "model-cancel") null else id to android.os.SystemClock.elapsedRealtime()
+            if (operation == "model" || operation == "model-key") outputReader.dismissedModelMenuId = null
+            else outputReader.dismissedModelMenuId = menuId
+            outputReader.modelMenuRequest = if (operation == "model-cancel") null else id to android.os.SystemClock.elapsedRealtime()
             _state.update { it.copy(agentModelMenu = if (operation == "model-key") it.agentModelMenu else null,
                 modelMenuPending = operation == "model") }
             setDelivery(id, receipt, "delivered", "Model action dispatched. Check the terminal.", operation = operation)
-            runCatching { readOutput() }.onFailure { if (it is CancellationException) throw it }
+            runCatching { outputReader.read() }.onFailure { if (it is CancellationException) throw it }
             _state.update { it.copy(message = when (operation) {
                 "model" -> if (it.agentModelMenu == null) "Opening model choices…" else null
                 "model-cancel" -> if (it.agentModelMenu == null) "Model menu closed." else null
@@ -1109,15 +869,15 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         } catch (cancelled: CancellationException) { throw cancelled
         } catch (error: Exception) {
             if (generation != connectionGeneration || api !== bridge) return@action
-            modelMenuRequest = null
-            dismissedModelMenuId = menuId
+            outputReader.modelMenuRequest = null
+            outputReader.dismissedModelMenuId = menuId
             _state.update { it.copy(agentModelMenu = null, modelMenuPending = false) }
             val uncertain = dispatchStarted && isUncertain(error)
             setDelivery(id, receipt, if (uncertain) "uncertain" else "failed",
                 if (uncertain) "Model action delivery is uncertain. Inspect the terminal before trying again."
                 else (error.message ?: "Model action was not sent."), operation = operation)
             // Keep the prompt draft and its delivery receipt intact. Never retry a model mutation.
-            runCatching { readOutput() }.onFailure { if (it is CancellationException) throw it }
+            runCatching { outputReader.read() }.onFailure { if (it is CancellationException) throw it }
             throw if (uncertain) java.io.IOException("Model action delivery is uncertain. Check the live menu before trying again.", error) else error
         }
     }
@@ -1188,11 +948,6 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         val next = api.snapshot()
         if (generation != connectionGeneration || api !== bridge) return@action
         applySnapshot(next)
-    }
-    private suspend fun paneCall(action: String, body: JsonObject = buildJsonObject {}, operationId: String? = null): JsonObject {
-        val id = requireNotNull(_state.value.selectedId)
-        requireActivePane(id)
-        return requireBridge().call(listOf("v1", "panes", id, action), "POST", body, operationId)
     }
     private suspend fun requireActivePane(id: String) {
         val current = _state.value

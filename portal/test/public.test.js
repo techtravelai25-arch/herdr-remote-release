@@ -143,3 +143,15 @@ test('unrestricted registration retains the global daily admission abuse quota',
  assert.equal((await createPortal().fetch(request,s.env)).status,429);
  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM laptops').get().n,1);
 });
+
+test('per-IP daily email cap rejects before the global send budget is charged',async t=>{
+ const s=setup(t);let clock=Math.floor(Date.now()/86400000)*86400000+3600000;t.mock.method(Date,'now',()=>clock);
+ const app=createPortal(),start=(email,ip)=>app.fetch(new Request(s.env.PORTAL_ORIGIN+'/v1/auth/email/start',{method:'POST',headers:{'Content-Type':'application/json','CF-Connecting-IP':ip},body:JSON.stringify({email})}),s.env);
+ const statuses=[];
+ for(let hour=0;hour<3;hour++){for(let i=0;i<20;i++)statuses.push((await start(`user${hour}-${i}@example.com`,'198.51.100.7')).status);clock+=3600000;}
+ // 20 per hour, but at most 50 per day from one address.
+ assert.equal(statuses.filter(status=>status===200).length,50);assert.ok(statuses.slice(50).every(status=>status===429));
+ assert.equal((await start('other@example.com','198.51.100.8')).status,200);
+ const {createHash}=await import('node:crypto');const key=createHash('sha256').update(`email:global:${Math.floor(clock/1000/86400)}`).digest('hex');
+ assert.equal(s.db.prepare('SELECT count FROM quota_counters WHERE key=?').get(key).count,51);
+});

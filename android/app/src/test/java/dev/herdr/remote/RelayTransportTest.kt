@@ -182,4 +182,22 @@ class RelayTransportTest {
         assertEquals(1, calls)
     }
 
+    @Test fun relayDecryptAndBodyReadRunOffTheCallerThread() = runBlocking {
+        val threads = mutableListOf<String>()
+        val caller = Thread.currentThread().name
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val envelope = Json.parseToJsonElement(Buffer().also { request.body!!.writeTo(it) }.readUtf8()).jsonObject
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(ThreadRecordingBody(response(envelope).toString(), threads)).build()
+        }.build()
+        val credentials = Credentials(TEST_PORTAL_ORIGIN, "private-token", "phone", relayLaptopId = value("laptopId"),
+            relayPublicKey = value("laptopPublicSpki"), relayVersion = 3, relayRoutingToken = "r".repeat(43), relayRoutingExpires = 0)
+        val reply = RelayTransport.execute(http, Request.Builder().url("$TEST_PORTAL_ORIGIN/v1/snapshot").get().build(), credentials)
+        reply.use { assertEquals(200, it.code) }
+        // The body is read once and closed once (ResponseBody.close() also opens its source).
+        assertTrue(threads.isNotEmpty())
+        threads.forEach { assertNotEquals(caller, it); assertTrue(it, it.startsWith("DefaultDispatcher-worker")) }
+    }
+
 }

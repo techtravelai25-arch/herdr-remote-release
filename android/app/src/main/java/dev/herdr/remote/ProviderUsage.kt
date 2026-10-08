@@ -13,6 +13,10 @@ import java.time.format.DateTimeFormatter
     val windows: List<UsageWindow> = emptyList(),
     val updatedAt: String? = null,
     val message: String? = null,
+    /** Providers that share a group (for example several Claude accounts) are one product with separate quotas. */
+    val group: String? = null,
+    val account: String? = null,
+    val active: Boolean = false,
 )
 
 @Serializable data class UsageWindow(
@@ -40,7 +44,9 @@ internal fun usageStatus(provider: ProviderUsage, offline: Boolean, stale: Boole
 
 private fun ProviderUsage.measurementsExpired(now: Instant): Boolean {
     val updated = updatedAt?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return true
-    return updated.isAfter(now.plusSeconds(60)) || updated.isBefore(now.minusSeconds(300)) || windows.any { window ->
+    // Claude readings come from a cache the laptop refreshes every few minutes, so they stay current for longer.
+    val maxAge = if (group == "claude") 900L else 300L
+    return updated.isAfter(now.plusSeconds(60)) || updated.isBefore(now.minusSeconds(maxAge)) || windows.any { window ->
         window.resetsAt?.let { value ->
             runCatching { !Instant.parse(value).isAfter(now) }.getOrDefault(true)
         } ?: false

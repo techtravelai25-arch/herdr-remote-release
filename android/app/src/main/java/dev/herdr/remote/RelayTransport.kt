@@ -15,7 +15,9 @@ import javax.crypto.KeyAgreement
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -90,7 +92,8 @@ internal suspend fun executeNetwork(http: OkHttpClient, request: Request): Respo
 }
 
 internal object RelayTransport {
-    suspend fun execute(http: OkHttpClient, request: Request, credentials: Credentials): Response {
+    /** Key agreement, the capped body read, AES-GCM and JSON parsing all run on [Dispatchers.IO]. */
+    suspend fun execute(http: OkHttpClient, request: Request, credentials: Credentials): Response = withContext(Dispatchers.IO) {
         val laptopId = credentials.relayLaptopId ?: error("Missing encrypted connection identity.")
         val origin = Bridge.normalizeUrl(credentials.url).toHttpUrl()
         require(request.url.isHttps && request.url.host == origin.host && request.url.port == origin.port &&
@@ -110,7 +113,7 @@ internal object RelayTransport {
         val outer = Request.Builder().url(origin.newBuilder().addPathSegment("v1").addPathSegment("relay").addPathSegment(laptopId).addPathSegment("rpc").build())
             .apply { routingToken?.let { header("Authorization", "Bearer $it") } }
             .post(crypto.encrypt(plain).toString().toRequestBody("application/json".toMediaType())).build()
-        return executeNetwork(http, outer).use { response ->
+        executeNetwork(http, outer).use { response ->
             if (!response.isSuccessful) {
                 val uncertain = request.method !in listOf("GET", "HEAD") && (response.code >= 500 || response.code == 408)
                 throw BridgeHttpException(response.code, if (uncertain)
@@ -122,11 +125,8 @@ internal object RelayTransport {
                     else -> "The encrypted connection failed. Reconnect and check its status."
                 }, errorCode = if (uncertain) "operation_uncertain" else if (response.code in listOf(401, 403)) "relay_pairing_required" else null, operationId = request.header("X-Operation-Id"), operationStatus = if (uncertain) "uncertain" else null)
             }
-            val source = response.body?.source() ?: error("Empty relay response.")
-            source.request((RELAY_ENVELOPE_LIMIT + 1).toLong())
-            require(source.buffer.size <= RELAY_ENVELOPE_LIMIT) { "Encrypted response is too large." }
-            val bytes = source.buffer.readByteArray()
-            require(bytes.size <= RELAY_ENVELOPE_LIMIT) { "Encrypted response is too large." }
+            if (response.body == null) error("Empty relay response.")
+            val bytes = requireNotNull(readBoundedBody(response.body, RELAY_ENVELOPE_LIMIT)) { "Encrypted response is too large." }
             val decoded = try { crypto.decrypt(Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject) }
                 catch (e: Exception) { throw IOException(if (request.method in listOf("GET", "HEAD")) "Could not verify the encrypted laptop response. Reconnect or scan your laptop again."
                     else "Could not verify the laptop response. This action may have completed; check the laptop before sending it again.", e) }

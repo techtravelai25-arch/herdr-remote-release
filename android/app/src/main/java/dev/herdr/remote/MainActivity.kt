@@ -9,6 +9,10 @@ import android.net.Uri
 import android.provider.Settings
 import android.os.Bundle
 import android.os.Build
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -43,6 +47,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -73,14 +78,6 @@ private fun notificationEnableAction(context: Context, deniedPreviously: Boolean
         deniedPreviously = deniedPreviously,
     )
 
-/**
- * THESIS: Happy-inspired session browsing with native Android controls.
- * OWN-WORLD: neutral light/dark surfaces, restrained blue selection, Material type.
- * STORY: find an agent, read its output, send with visible delivery state.
- * FIRST VIEWPORT: compact laptop identity, search and grouped session rows; reserved New agent action area.
- * FORM: user-pinned Happy direction overrides seed d33c1c8b; compact list-detail navigation.
- * FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
- */
 class MainActivity: ComponentActivity() {
     private var notificationPane by mutableStateOf<String?>(null)
     private var notificationDeviceId by mutableStateOf<String?>(null)
@@ -438,10 +435,6 @@ class MainActivity: ComponentActivity() {
         dismissButton = { TextButton(onClick = { deletingAccount = false }) { Text("Cancel") } }
     )
 }
-@Composable internal fun StatusLabel(status: String) {
-    val color = when(status) { "working" -> MaterialTheme.colorScheme.tertiary; "blocked", "needs_input", "needs-input" -> MaterialTheme.colorScheme.primary; "error" -> MaterialTheme.colorScheme.error; "done" -> MaterialTheme.colorScheme.tertiary; else -> MaterialTheme.colorScheme.onSurfaceVariant }
-    Text(status.replace('_', ' ').replace('-', ' ').replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelMedium, color = color)
-}
 internal fun kindLabel(kind: String) = when(kind) { "codex" -> "Codex"; "claude", "claude-code" -> "Claude Code"; "opencode" -> "OpenCode"; "terminal" -> "Terminal"; "" -> "Unknown"; else -> kind }
 internal fun activityLabel(value: String?): String = value?.let { runCatching { DateTimeFormatter.ofPattern("MMM d, HH:mm").withZone(ZoneId.systemDefault()).format(Instant.parse(it)) }.getOrDefault(it) } ?: "unknown"
 
@@ -460,15 +453,50 @@ internal fun activityLabel(value: String?): String = value?.let { runCatching { 
     }
     var showingFiles by rememberSaveable(state.url, state.portalDeviceId, state.selectedId) { mutableStateOf(false) }
     var fileMessage by rememberSaveable(state.url, state.portalDeviceId, state.selectedId) { mutableStateOf<String?>(null) }
+    var htmlPreview by remember(state.url, state.portalDeviceId, state.selectedId) { mutableStateOf<HtmlPreviewRequest?>(null) }
+    var previewError by remember(state.url, state.portalDeviceId, state.selectedId) { mutableStateOf<String?>(null) }
+    val openPreview: (String?, String?) -> Unit = { target, artifactId ->
+        runCatching { model.htmlPreviewSource() }.onSuccess {
+            showingFiles = false
+            htmlPreview = HtmlPreviewRequest(it, target, artifactId)
+        }.onFailure { previewError = it.message ?: "Could not open this page. Reconnect and try again." }
+    }
+    val openHtmlLink: (String) -> Unit = remember(model, state.url, state.portalDeviceId, state.selectedId) {
+        { target -> openPreview(target, null) }
+    }
     LaunchedEffect(state.message, showingFiles) {
         if (showingFiles && state.message != null) fileMessage = state.message
     }
     var detailTab by rememberSaveable(state.selectedId) { mutableIntStateOf(0) }
-    DisposableEffect(model, state.selectedId, detailTab) {
-        model.outputVisible(detailTab == 0)
+    DisposableEffect(model, state.selectedId, detailTab, htmlPreview) {
+        model.outputVisible(detailTab == 0 && htmlPreview == null)
         onDispose { model.outputVisible(false) }
     }
     var storage by rememberSaveable { mutableStateOf(false) }
+    htmlPreview?.let { request ->
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { htmlPreview = null },
+            properties = androidx.compose.ui.window.DialogProperties(
+                usePlatformDefaultWidth = false, decorFitsSystemWindows = false,
+            ),
+        ) {
+            val previewView = androidx.compose.ui.platform.LocalView.current
+            val lightBars = MaterialTheme.colorScheme.surface.luminance() > 0.5f
+            SideEffect {
+                val window = (previewView.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+                if (window != null) androidx.core.view.WindowCompat.getInsetsController(window, previewView).apply {
+                    isAppearanceLightStatusBars = lightBars
+                    isAppearanceLightNavigationBars = lightBars
+                }
+            }
+            Surface(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize().systemBarsPadding()) {
+                    HtmlPreviewScreen(request.source, request.target, request.artifactId, onClose = { htmlPreview = null })
+                }
+            }
+        }
+    }
+    CompositionLocalProvider(LocalHtmlPreviewOpener provides openHtmlLink) {
     Column(Modifier.fillMaxSize()) {
         if (detailTab == 1) Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { detailTab = 0 }) { Text("Back to conversation") }
@@ -480,7 +508,12 @@ internal fun activityLabel(value: String?): String = value?.let { runCatching { 
         Box(Modifier.weight(1f)) {
             if (detailTab == 1) ConversationHistory(state.structuredHistory, state.historyLoading, state.historyError, state.online, { model.loadHistory() }, { model.loadHistory(true) })
             else if (detailTab == 2) ReviewResults(state.review, state.reviewLoading,
-                onRefresh = { pane?.id?.let(model::loadReview) }, onArtifact = model::openArtifact,
+                onRefresh = { pane?.id?.let(model::loadReview) }, onArtifact = { id ->
+                    val name = state.review?.get("artifacts")?.jsonArray?.mapNotNull { it as? JsonObject }
+                        ?.firstOrNull { it["id"]?.jsonPrimitive?.contentOrNull == id }
+                        ?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty()
+                    if (isHtmlFile(name)) openPreview(null, id) else model.openArtifact(id)
+                },
                 onSave = requestSave)
             else {
                 TerminalLiveView(state, pane,
@@ -497,19 +530,28 @@ internal fun activityLabel(value: String?): String = value?.let { runCatching { 
                     onChangeModel = model::openAgentModelMenu,
                     onReviewQuestion = model::reviewQuestion,
                     onAnswerQuestion = { option, text -> state.question?.id?.let { model.answerQuestion(it, option, text) } },
-                    onOpenHistory = { detailTab = 1; if (state.online) model.loadHistory() })
+                    onOpenHistory = { detailTab = 1; if (state.online) model.loadHistory() },
+                    onEarlierHistory = { model.loadHistory(true) })
             }
         }
+    }
     }
     if (showingFiles) FilesBrowserDialog(files = state.projectFiles, loading = state.projectFilesLoading,
         error = state.projectFilesError, operationMessage = fileMessage,
         url = state.url, portalDeviceId = state.portalDeviceId,
         onDismiss = { showingFiles = false },
         onNavigate = { directory, cursor -> fileMessage = null; model.clearMessage(); model.loadProjectFiles(directory, cursor) },
-        onOpen = { file -> fileMessage = null; model.clearMessage(); if (file.isDirectory) model.loadProjectFiles(file.path) else file.id?.let(model::openArtifact) },
+        onOpen = { file -> fileMessage = null; model.clearMessage()
+            if (file.isDirectory) model.loadProjectFiles(file.path)
+            else if (isHtmlFile(file.path)) openPreview(file.path, null)
+            else file.id?.let(model::openArtifact)
+        },
         // Only offer the pick when the reference exists; never launch with no source file.
         onSave = { file -> fileMessage = null; model.clearMessage(); file.id?.let { requestSave(it, file.path) } })
     if (storage) AttachmentStorageDialog(state, model, onDismiss = { storage = false })
+    previewError?.let { message -> AlertDialog(onDismissRequest = { previewError = null },
+        title = { Text("Page unavailable") }, text = { Text(message) },
+        confirmButton = { TextButton(onClick = { previewError = null }) { Text("Close") } }) }
     state.agentModelMenu?.takeIf { detailTab == 0 && pane != null }?.let { menu ->
         val enabled = canChangeAgentModel(state, pane) && pane?.let { state.deliveries[it.id]?.isUnresolved() } != true
         CodexModelDialog(menu, enabled, state.busy,
@@ -519,6 +561,8 @@ internal fun activityLabel(value: String?): String = value?.let { runCatching { 
             onKey = { model.agentModelKey(menu.id, it) })
     }
 }
+
+private data class HtmlPreviewRequest(val source: HtmlPreviewSource, val target: String?, val artifactId: String?)
 
 @Composable internal fun AgentActions(enabled: Boolean, onControl: (String) -> Unit,
     currentTitle: String = "", canRename: Boolean = false, canFocus: Boolean = false,
@@ -646,7 +690,8 @@ internal fun activityLabel(value: String?): String = value?.let { runCatching { 
     var expanded by remember { mutableStateOf(false) }
     val mono = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace, fontSize = fontSize.sp, lineHeight = (fontSize * 1.35f).sp)
     val context = androidx.compose.ui.platform.LocalContext.current
-    val linked = remember(block.text) { linkedAnnotated(block.text.trim(), context) }
+    val openLink = rememberTranscriptLinkOpener()
+    val linked = remember(block.text, openLink) { linkedAnnotated(block.text.trim(), context, openLink) }
     if (block.isUser) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Surface(modifier = Modifier.padding(start = 12.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,

@@ -25,6 +25,10 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +57,7 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
     onCheckDelivery: (String) -> Unit,
     onChangeModel: () -> Unit = {},
     onOpenHistory: () -> Unit = {},
+    onEarlierHistory: () -> Unit = {},
     onAcknowledgeDelivery: (String) -> Unit = {},
     onReviewQuestion: () -> Unit = {},
     onAnswerQuestion: (Int?, String?) -> Unit = { _, _ -> }
@@ -89,6 +94,20 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
     var wrap by rememberSaveable(paneId) { mutableStateOf(true) }
     var exactSpacing by rememberSaveable(paneId) { mutableStateOf(pane?.kind == "terminal") }
     var showFullTerminal by rememberSaveable(paneId) { mutableStateOf(false) }
+    // A saved transcript separates what you wrote from the reply and leaves out the agent's input box and
+    // status chrome. The raw terminal stays one tap away and is the fallback whenever no transcript exists.
+    var rawTerminal by rememberSaveable(paneId) { mutableStateOf(false) }
+    // Saved history does not contain live approval menus. Prefer the live snapshot for
+    // terminal-only questions without changing the user's normal reading preference.
+    // A queued or opening question has no readable native card yet. Keep its
+    // live terminal visible until the bridge supplies the actual question.
+    val terminalQuestion = needsInput && nativeQuestion == null
+    var reviewConversation by remember(readingIdentity, terminalQuestion) { mutableStateOf(false) }
+    val showTerminal = if (terminalQuestion) !reviewConversation else rawTerminal
+    val history = state.structuredHistory?.takeIf { pane != null && pane.kind != "terminal" && it.available && it.messages.isNotEmpty() }
+    val transcript = history != null && !showTerminal
+    val loadingTranscript = pane != null && pane.kind != "terminal" && state.structuredHistory == null && state.historyLoading && !showTerminal
+    LaunchedEffect(readingIdentity, terminalQuestion) { if (terminalQuestion) heldOutput = null }
     var fontSize by rememberSaveable(paneId) { mutableFloatStateOf(15f) }
     var showKeys by rememberSaveable(paneId) { mutableStateOf(false) }
     var moreKeys by rememberSaveable(paneId) { mutableStateOf(false) }
@@ -105,6 +124,7 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
         else modelNotice = modelUnavailableMessage(state, pane)
     }
     val context = LocalContext.current
+    val openLink = rememberTranscriptLinkOpener()
     val latestOutput = remember(state.output, pane?.kind, pane?.status, state.outputTruncated) {
         TerminalReadingSnapshot(state.output, pane?.kind ?: "terminal", pane?.status ?: "unknown", state.outputTruncated)
     }
@@ -166,7 +186,13 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
                                         onClick = { options = false; onRefresh() })
                                     DropdownMenuItem(text = { Text(if (exactSpacing) "Readable text" else "Exact terminal spacing") },
                                         onClick = { exactSpacing = !exactSpacing; options = false })
-                                    if (pane?.kind != "terminal") DropdownMenuItem(
+                                    if (history != null) DropdownMenuItem(
+                                        text = { Text(if (showTerminal) "Show conversation" else "Show raw terminal") },
+                                        onClick = {
+                                            if (terminalQuestion) reviewConversation = !reviewConversation else rawTerminal = !rawTerminal
+                                            options = false
+                                        })
+                                    if (pane?.kind != "terminal" && !transcript) DropdownMenuItem(
                                         text = { Text(if (showFullTerminal) "Hide idle input area" else "Show full terminal text") },
                                         onClick = { showFullTerminal = !showFullTerminal; options = false })
                                     DropdownMenuItem(text = { Text(if (wrap) "Wrap lines: on" else "Wrap lines: off") },
@@ -211,6 +237,8 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
             notice?.let { Text(it, style = MaterialTheme.typography.labelSmall,
                 color = if (canInput) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error) }
             Text(when {
+                transcript -> "Conversation · ${kindLabel(pane?.kind.orEmpty())}"
+                terminalQuestion -> "Live terminal question"
                 readingOutput.truncated && display.footerHidden -> "Recent output · input area hidden · earlier content unavailable"
                 readingOutput.truncated -> "Recent output · earlier content unavailable"
                 display.footerHidden -> "Recent terminal output · input area hidden"
@@ -219,13 +247,38 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Surface(Modifier.fillMaxWidth().height(readerHeight), color = MaterialTheme.colorScheme.surface,
+            if (transcript && history != null) Surface(Modifier.fillMaxWidth().height(readerHeight), color = MaterialTheme.colorScheme.surface,
+                shape = MaterialTheme.shapes.medium) {
+                ConversationTranscript(history, kindLabel(pane?.kind.orEmpty()),
+                    working = pane?.status in setOf("working", "running", "starting"),
+                    sentPrompts = paneId?.let { state.sentPrompts[it] }.orEmpty(),
+                    sentAtMs = paneId?.let { state.lastPromptAt[it] },
+                    fontSize = fontSize, loadingEarlier = state.historyLoading, onEarlier = onEarlierHistory,
+                    modifier = Modifier.fillMaxSize())
+            } else if (loadingTranscript) Surface(Modifier.fillMaxWidth().height(readerHeight), color = MaterialTheme.colorScheme.surface,
+                shape = MaterialTheme.shapes.medium) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Loading conversation…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else Surface(Modifier.fillMaxWidth().height(readerHeight), color = MaterialTheme.colorScheme.surface,
                 shape = MaterialTheme.shapes.medium) {
                 Box(Modifier.fillMaxSize()) {
                     SelectionContainer {
                         Box(Modifier.fillMaxSize().nestedScroll(scrollObserver).verticalScroll(vertical)
                             .then(if (wrap) Modifier else Modifier.horizontalScroll(horizontal)).padding(12.dp)) {
-                            Text(if (!state.outputReady) "Loading terminal snapshot…" else display.text.ifEmpty { "(no text in this snapshot)" },
+                            val shown = remember(display.text, exactSpacing) { readableTerminalText(display.text, collapseRules = !exactSpacing) }
+                            val styled = remember(shown, exactSpacing, openLink) {
+                                buildAnnotatedString {
+                                    append(shown)
+                                    transcriptLinkRanges(shown).forEach { range ->
+                                        val target = shown.substring(range.start, range.endExclusive)
+                                        addLink(LinkAnnotation.Url(target) { openLink(target) }, range.start, range.endExclusive)
+                                    }
+                                    // Aligned columns need a fixed-width face even in readable text.
+                                    if (!exactSpacing) boxTableRanges(shown).forEach { addStyle(SpanStyle(fontFamily = FontFamily.Monospace), it.first, it.last + 1) }
+                                }
+                            }
+                            Text(if (!state.outputReady) AnnotatedString("Loading terminal snapshot…") else if (shown.isEmpty()) AnnotatedString("(no text in this snapshot)") else styled,
                                 modifier = if (wrap) Modifier.fillMaxWidth() else Modifier,
                                 fontFamily = if (exactSpacing) FontFamily.Monospace else FontFamily.Default,
                                 fontSize = fontSize.sp, lineHeight = (fontSize * 1.4f).sp, softWrap = wrap)
@@ -251,6 +304,9 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
                 Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Answer in the terminal", style = MaterialTheme.typography.titleSmall)
+                    if (transcript) TextButton(onClick = { reviewConversation = false; heldOutput = null }) {
+                        Text("Show live question")
+                    }
                     Text("Menu: Previous, Next, Confirm. Written answer: Send below. Active terminal text field: Insert text, then Confirm.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)

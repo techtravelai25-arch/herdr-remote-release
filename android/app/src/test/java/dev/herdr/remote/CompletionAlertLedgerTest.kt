@@ -93,4 +93,52 @@ class CompletionAlertLedgerTest {
         assertTrue(after.show(slot, "laptop", b, t + 2).second)
     }
 
+    @Test fun attentionAcknowledgementClearsLocalAndCloudExactEvent() {
+        val localSlot = "attention:local:pane"
+        val initial = CompletionAlertLedger().show(localSlot, "local", a, t).first
+            .show(slot, "laptop", a, t).first
+        val pane = Pane("pane", "workspace", kind = "codex", status = "needs_input",
+            attentionEventId = a, attentionAcknowledged = true)
+        val (after, cancelled) = initial.reconcile(Snapshot(herdrOnline = true, panes = listOf(pane)), "local", "laptop", t + 1)
+        assertEquals(setOf(localSlot, slot), cancelled.toSet())
+        assertTrue(after.current.isEmpty())
+        assertFalse(after.show(localSlot, "local", a, t + 2).second)
+    }
+
+    @Test fun attentionHistoryCannotCancelNewerLocalOrCloudAlert() {
+        val localSlot = "attention:local:pane"
+        val initial = CompletionAlertLedger().show(localSlot, "local", b, t).first
+            .show(slot, "laptop", b, t).first
+        val pane = Pane("pane", "workspace", kind = "codex", status = "needs_input",
+            attentionEventId = b, acknowledgedAttentionEventIds = listOf(a))
+        val (after, cancelled) = initial.reconcile(Snapshot(herdrOnline = true, panes = listOf(pane)), "local", "laptop", t + 1)
+        assertTrue(cancelled.isEmpty())
+        assertEquals(b, after.current[localSlot])
+        assertEquals(b, after.current[slot])
+    }
+
+    @Test fun legacyAttentionOnlyClearsOnFreshConfirmedResume() {
+        val localSlot = "attention:local:pane"
+        val initial = CompletionAlertLedger().show(localSlot, "local", "legacy:1", t).first
+        fun s(status: String) = Snapshot(herdrOnline = true, panes = listOf(Pane("pane", "workspace", status = status)))
+        for (snapshot in listOf(s("unknown"), s("needs_input"), s("working").copy(stale = true), s("working").copy(herdrOnline = false))) {
+            assertTrue(initial.reconcile(snapshot, "local", "laptop", t + 1).second.isEmpty())
+        }
+        for (status in listOf("working", "idle", "done")) {
+            assertEquals(listOf(localSlot), initial.reconcile(s(status), "local", "laptop", t + 1).second)
+        }
+        val exact = initial.show(localSlot, "local", b, t + 1).first
+        assertTrue(exact.reconcile(s("working"), "local", "laptop", t + 2).second.isEmpty())
+    }
+
+    @Test fun staleAndOfflineAttentionAcknowledgementsNeverDismiss() {
+        val localSlot = "attention:local:pane"
+        val state = CompletionAlertLedger().show(localSlot, "local", a, t).first
+        val snapshot = Snapshot(herdrOnline = true, panes = listOf(Pane("pane", "workspace",
+            attentionEventId = a, attentionAcknowledged = true)))
+        for (s in listOf(snapshot.copy(stale = true), snapshot.copy(herdrOnline = false))) {
+            assertEquals(state, state.reconcile(s, "local", "laptop", t + 1).first)
+        }
+    }
+
 }

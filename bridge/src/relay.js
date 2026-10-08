@@ -11,17 +11,38 @@ export function generateIdentity(){const {publicKey,privateKey}=generateKeyPairS
 export function deriveKey(privateKey,epk,laptopId,id){const publicKey=createPublicKey({key:decode(epk,256),type:'spki',format:'der'});if(publicKey.asymmetricKeyType!=='ec'||publicKey.asymmetricKeyDetails?.namedCurve!=='prime256v1')throw Error('Invalid key');return Buffer.from(hkdfSync('sha256',diffieHellman({privateKey:createPrivateKey(privateKey),publicKey}),SALT,Buffer.from(`${laptopId}:${id}`),32));}
 export function encryptPayload(key,laptopId,id,value,direction='response'){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);cipher.setAAD(Buffer.from(`${CONTEXT}:${laptopId}:${id}:${direction}`));const data=Buffer.concat([cipher.update(JSON.stringify(value)),cipher.final(),cipher.getAuthTag()]);if(data.length>MAX_ENVELOPE_BYTES*0.74)throw Error('Response too large');return {v:1,id,iv:iv.toString('base64url'),data:data.toString('base64url')};}
 export function decryptPayload(key,laptopId,envelope,direction='request'){const iv=decode(envelope.iv,16),data=decode(envelope.data,MAX_ENVELOPE_BYTES);if(iv.length!==12||data.length<16)throw Error('Invalid envelope');const decipher=createDecipheriv('aes-256-gcm',key,iv);decipher.setAAD(Buffer.from(`${CONTEXT}:${laptopId}:${envelope.id}:${direction}`));decipher.setAuthTag(data.subarray(-16));return JSON.parse(Buffer.concat([decipher.update(data.subarray(0,-16)),decipher.final()]).toString());}
-export function createRelayHandler({identity,port,fetchImpl=fetch,now=Date.now,transfers,store,routing}){
-  const seen=new Map((store?.read('relay-replay.json',[])||[]).filter(([,expiry])=>expiry>=now()));let active=0;
-  return async (envelope,capability)=>{
+const REQUEST_SKEW_MS=120000,REPLAY_WINDOW_MS=2*REQUEST_SKEW_MS,MAX_REPLAY_IDS=10000;
+/**
+ * Request IDs seen within the timestamp window. The set lives in memory and is
+ * written compactly before every request is forwarded, so a restarted or
+ * crashed companion still rejects replays. Mutating (non-GET) requests are
+ * fsynced to survive power loss; GET IDs skip fsync because a replayed read
+ * returns a response encrypted to the phone's ephemeral key.
+ */
+function createReplayGuard(store,now,limit) {
+  const seen=new Map((store?.read('relay-replay.json',[])||[]).filter(([,expiry])=>expiry>=now()));
+  function accept(id,durable) {
+    const time=now();
+    for(const [key,expiry] of seen)if(expiry<time)seen.delete(key);
+    if(seen.has(id))throw Error('Request replayed');
+    // Never reject an unseen ID: a full window must not lock out the phone.
+    // Past the cap (~42 requests/s sustained for the whole window) the oldest
+    // ID is forgotten early. It could be replayed only while its timestamp is
+    // still within the skew; mutations also carry operation-ID receipts.
+    while(seen.size>=limit)seen.delete(seen.keys().next().value);
+    seen.set(id,time+REPLAY_WINDOW_MS);
+    store?.write('relay-replay.json',[...seen],{compact:true,durable});
+  }
+  return {accept,close(){}};
+}
+export function createRelayHandler({identity,port,fetchImpl=fetch,now=Date.now,transfers,store,routing,replayLimit=MAX_REPLAY_IDS}){
+  const replay=createReplayGuard(store,now,replayLimit);let active=0;
+  const handler=async (envelope,capability)=>{
     if(envelope?.v!==1||typeof envelope.id!=='string'||!/^[a-f0-9-]{36}$/i.test(envelope.id))throw Error('Invalid envelope');
     const key=deriveKey(identity.privateKey,envelope.epk,identity.id,envelope.id);
     const req=decryptPayload(key,identity.id,envelope);
-    if(!Number.isSafeInteger(req.timestamp)||Math.abs(now()-req.timestamp)>120000)throw Error('Request expired');
-    for(const [id,expiry] of seen)if(expiry<now())seen.delete(id);
-    if(seen.has(envelope.id)||seen.size>=10000)throw Error('Request replayed');
-    seen.set(envelope.id,now()+240000);
-    store?.write('relay-replay.json',[...seen]);
+    if(!Number.isSafeInteger(req.timestamp)||Math.abs(now()-req.timestamp)>REQUEST_SKEW_MS)throw Error('Request expired');
+    replay.accept(envelope.id,req.method!=='GET');
     const response=value=>encryptPayload(key,identity.id,envelope.id,value);
     const error=(status,message)=>response({status,headers:{'content-type':'application/json'},body:Buffer.from(JSON.stringify({error:{code:'relay_error',message}})).toString('base64url')});
     if(routing&&!routing.check(capability,req))return error(403,'Routing capability does not authorize this request.');
@@ -47,6 +68,8 @@ export function createRelayHandler({identity,port,fetchImpl=fetch,now=Date.now,t
       return response({status:out.status,headers:out.headers,body:out.body??out.bytes.toString('base64url')});
     }catch{return error(502,req.method==='GET'?'The laptop could not complete this request.':'The connection failed. This action may have completed; check its status before retrying.');}finally{active--;}
   };
+  handler.close=replay.close;
+  return handler;
 }
 export function startRelay({identity,port,store,onStatus=()=>{},WebSocketImpl=WebSocket}){
   const routing=routingCapabilities(store);const transfers=createTransfers({store,port});const handler=createRelayHandler({identity,port,transfers,store,routing});let stopped=false,ws,timer,heartbeat,attempt=0,alive=false;const controls=new Map();let syncTimer;
@@ -67,5 +90,6 @@ export function startRelay({identity,port,store,onStatus=()=>{},WebSocketImpl=We
     ws.on('message',async raw=>{try{if(raw.length>MAX_ENVELOPE_BYTES)return;const msg=JSON.parse(raw);if(msg.type==='capability-ack'){const pending=controls.get(msg.id);if(pending){controls.delete(msg.id);routing.onAck(pending.capId,pending.action,msg);}return;}if(msg.type!=='request')return;const socket=ws;const envelope=await handler(msg.envelope,msg.capability);if(socket.readyState===WebSocket.OPEN&&socket.bufferedAmount<MAX_ENVELOPE_BYTES)socket.send(JSON.stringify({type:'response',envelope}));}catch{/* Untrusted/tampered requests get no oracle. */}});
     ws.on('error',()=>{});ws.on('close',()=>{controls.clear();clearInterval(heartbeat);onStatus(false);if(!stopped){timer=setTimeout(connect,Math.min(30000,500*2**Math.min(attempt++,6))+Math.random()*500);timer.unref();}});
   }
-  syncTimer=setInterval(()=>{try{sync();}catch{}},500);syncTimer.unref();connect();return {stop(){clearInterval(syncTimer);transfers.close();stopped=true;clearTimeout(timer);clearInterval(heartbeat);onStatus(false);ws?.terminate();}};
+  syncTimer=setInterval(()=>{try{sync();}catch{}},500);syncTimer.unref();connect();
+  return {stop(){clearInterval(syncTimer);transfers.close();handler.close();stopped=true;clearTimeout(timer);clearInterval(heartbeat);onStatus(false);ws?.terminate();}};
 }

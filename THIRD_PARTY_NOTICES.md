@@ -945,7 +945,7 @@ ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ## Android resolved runtime inventory
 
-This table was generated from `:app:dependencies --configuration releaseRuntimeClasspath` on 2026-09-21 and rechecked against this source release on 2026-10-03, including resolved transitive components and dependency platforms. It is not an inventory of test-only, preview-only, or build-plugin dependencies. License names/URLs come from the exact cached Maven POMs; inherited parent-POM licenses are resolved where applicable. All 160 selected components had identifiable license metadata. Platform/metadata coordinates in the table do not necessarily add code to the APK.
+This table was generated from `:app:dependencies --configuration releaseRuntimeClasspath` on 2026-09-21 and rechecked against this source release on 2026-10-08, including resolved transitive components and dependency platforms. It is not an inventory of test-only, preview-only, or build-plugin dependencies. License names/URLs come from the exact cached Maven POMs; inherited parent-POM licenses are resolved where applicable. All 158 selected components had identifiable license metadata. Platform/metadata coordinates in the table do not necessarily add code to the APK.
 
 Most components declare Apache 2.0. Google Play Services and certain Firebase interoperability components instead declare the **Android Software Development Kit License**; the original-project AGPL license does not replace those terms. The Public Suffix List resource packaged by OkHttp is MPL 2.0, as its embedded notice below states. Do not describe the entire dependency bundle as MIT-only.
 
@@ -994,8 +994,6 @@ Embedded license/copyright/notice resources were extracted from the resolved cac
 | `androidx.compose.ui:ui-graphics-android:1.8.0` | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) |
 | `androidx.compose.ui:ui-text:1.8.0` | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) |
 | `androidx.compose.ui:ui-text-android:1.8.0` | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) |
-| `androidx.compose.ui:ui-tooling-preview:1.8.0` | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) |
-| `androidx.compose.ui:ui-tooling-preview-android:1.8.0` | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) |
 | `androidx.compose.ui:ui-unit:1.8.0` | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) |
 | `androidx.compose.ui:ui-unit-android:1.8.0` | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) |
 | `androidx.compose.ui:ui-util:1.8.0` | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) |
@@ -1137,7 +1135,6 @@ Sources:
 - `androidx.compose.ui:ui-geometry-android:1.8.0 / META-INF/androidx/compose/ui/ui-geometry/LICENSE.txt`
 - `androidx.compose.ui:ui-graphics-android:1.8.0 / META-INF/androidx/compose/ui/ui-graphics/LICENSE.txt`
 - `androidx.compose.ui:ui-text-android:1.8.0 / META-INF/androidx/compose/ui/ui-text/LICENSE.txt`
-- `androidx.compose.ui:ui-tooling-preview-android:1.8.0 / META-INF/androidx/compose/ui/ui-tooling-preview/LICENSE.txt`
 - `androidx.compose.ui:ui-unit-android:1.8.0 / META-INF/androidx/compose/ui/ui-unit/LICENSE.txt`
 - `androidx.compose.ui:ui-util-android:1.8.0 / META-INF/androidx/compose/ui/ui-util/LICENSE.txt`
 - `androidx.core:core-viewtree:1.0.0 / META-INF/androidx/core/core-viewtree/LICENSE.txt`

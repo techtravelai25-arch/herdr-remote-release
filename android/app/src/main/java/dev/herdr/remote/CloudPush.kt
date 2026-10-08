@@ -36,6 +36,7 @@ class RemoteApplication : Application() {
 object CloudPush {
     const val EXTRA_DEVICE_ID = "push_device_id"
     private const val CHANNEL = "cloud_agent_alerts"
+    private const val PUSH_SOURCE = "push"
     private const val WORK = "cloud-push-registration"
     private val registrationLock = Mutex()
     private fun prefs(context: Context) = context.getSharedPreferences("cloud_push", Context.MODE_PRIVATE)
@@ -88,8 +89,15 @@ object CloudPush {
         prefs(context).edit { putBoolean("enabled", false) }
         WorkManager.getInstance(context).cancelUniqueWork(WORK)
         runCatching { initialize(context).isAutoInitEnabled = false }
-        context.getSystemService(NotificationManager::class.java).cancelAll()
+        // Only alerts posted by cloud push; local reply, attention and monitoring notifications stay.
+        val manager = context.getSystemService(NotificationManager::class.java)
+        runCatching { manager.activeNotifications.toList() }.getOrDefault(emptyList())
+            .filter { isCloudPushNotification(it.tag, it.notification.channelId) }
+            .forEach { manager.cancel(it.tag, it.id) }
     }
+    /** Cloud push alerts use the `push:` ledger slot as their tag and their own channel. */
+    internal fun isCloudPushNotification(tag: String?, channelId: String?): Boolean =
+        tag?.startsWith("$PUSH_SOURCE:") == true || channelId == CHANNEL
     fun scheduleRegistration(context: Context) {
         if (!enabled(context)) return
         WorkManager.getInstance(context).enqueueUniqueWork(WORK, ExistingWorkPolicy.REPLACE,
@@ -107,10 +115,10 @@ object CloudPush {
         if (kind == "clear") {
             val target = data["targetEventId"]?.takeIf { it.matches(Regex("[\\w-]{1,80}")) } ?: return
             // Record the tombstone even when Android's notification permission is denied.
-            CompletionAlerts.clear(context, "push", device, pane, target, event)
+            CompletionAlerts.clear(context, PUSH_SOURCE, device, pane, target, event)
             return
         }
-        CompletionAlerts.show(context, "push", device, pane, event, event) {
+        CompletionAlerts.show(context, PUSH_SOURCE, device, pane, event, event) {
             show(context, device, pane, kind)
         }
     }
@@ -125,7 +133,7 @@ object CloudPush {
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "Agent alerts", NotificationManager.IMPORTANCE_DEFAULT))
         val open = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val copy = NotificationCopy.next(context, kind)
-        manager.notify(CompletionAlerts.slot("push", device, pane), 1, NotificationPresentation.alert(
+        manager.notify(CompletionAlerts.slot(PUSH_SOURCE, device, pane), 1, NotificationPresentation.alert(
             context, CHANNEL, copy.title, copy.body, open,
         ).build())
     }

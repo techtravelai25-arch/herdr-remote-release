@@ -13,7 +13,19 @@ An Android companion for [Herdr](https://github.com/herdrdev/herdr). Read agent 
 
 The setup guide covers the PC requirements and connection steps. The standard APK uses QR pairing; [cloud features](portal/README.md) are optional.
 
-Version **0.8.26 (61)** installs as `dev.herdr.remote.community`. An older community APK with a different signer requires a fresh installation and pairing. See [release verification](docs/releases.md).
+Version **0.8.34 (69)** installs as `dev.herdr.remote.community` and updates community 0.8.26 in place. The matching laptop companion is 0.8.34 (sequence 70). An older community APK with a different signer requires a fresh installation and pairing. See [release verification](docs/releases.md).
+
+## What works
+
+- Live terminal output plus a clean, read-only Claude, Codex, and OpenCode transcript with earlier-message paging.
+- Prompts and terminal keys, model switching, session management, Git review, and file transfers.
+- Codex question cards with the full question and selectable answers, including questions asked when a session opens. **Other** accepts a custom answer; questions without choices show a typed-answer field. Claude and OpenCode questions use the visible terminal and keys.
+- Project file browsing and private, read-only text previews.
+- Local HTML previews: tap an HTML result link or an HTML file in Files/Results. Nearby styles, images, and scripts load through the paired laptop connection. See [HTML previews](docs/html-previews.md).
+- Claude and Codex usage for each account, and phone notifications that clear when you read the reply on the PC.
+- Per-device permissions, saved PCs, signed companion updates, and optional cloud push.
+
+Keep your PC awake and online, and update both the app and the companion for new controls.
 
 ## Screenshots
 

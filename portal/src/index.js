@@ -51,6 +51,22 @@ async function smallBody(request) {
   return Buffer.concat(chunks).toString('utf8');
 }
 async function body(request) { if(!hasMediaType(request,'application/json'))fail(415,'content_type','Use application/json.');try{const v=JSON.parse(await smallBody(request));if(!v||typeof v!=='object'||Array.isArray(v))throw Error();return v;}catch(e){if(e instanceof HttpError)throw e;fail(400,'invalid_json','Invalid request.');} }
+// Global counters are cost circuit-breakers, sized well above what per-IP
+// limits let a handful of addresses reach. Callers charge per-IP and per-code
+// limits first so rejected traffic never consumes shared budget.
+const START_GLOBAL_LIMIT=1200,POLL_GLOBAL_LIMIT=6000;
+const clientIp=request=>request.headers.get('CF-Connecting-IP')||'unknown';
+/** Per-IP edge admission before any D1 work. Returns false when the binding is absent. */
+async function edgeLimit(request,env) {
+  if(!env.EDGE_SIGNUP_LIMIT)return false;
+  if(!(await env.EDGE_SIGNUP_LIMIT.limit({key:request.headers.get('CF-Connecting-IP')||'local'})).success)fail(429,'rate_limited','Please wait before trying again.');
+  return true;
+}
+// Logged route labels never include identifiers, query strings or bodies.
+function routeLabel(pathname) {
+  return pathname.replace(/^\/v1\/relay\/[^/]+\//,'/v1/relay/:id/').replace(/^\/v1\/devices\/(?!claim$)[^/]+/,'/v1/devices/:id').replace(/[^\w/.:-]/g,'?').slice(0,80);
+}
+const signInRoute=pathname=>pathname==='/login'||pathname==='/login/approve'||pathname.startsWith('/v1/auth/');
 async function rate(env,key,limit,window=60) {
   const bucket=Math.floor(now()/window); const id=await hash(`${key}:${bucket}`);
   const row=await env.DB.prepare('INSERT INTO rate_limits(key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count').bind(id,now()+window*2).first();
@@ -96,6 +112,8 @@ export async function signGrant(env,s,device) {
 }
 export function createPortal({accessVerifier=verifyAccess,pushSender=sendFCM}={}) {
   return {/** @param {Request} request @param {PortalEnv} env @param {ExecutionContext} [ctx] */ async fetch(request,env,ctx) {
+    let pathname='';
+    try {pathname=new URL(request.url).pathname;}catch{}
     try {
       const url=new URL(request.url);
       if(url.origin!==env.PORTAL_ORIGIN)fail(421,'wrong_origin','Use the configured sign-in address.');
@@ -187,8 +205,9 @@ export function createPortal({accessVerifier=verifyAccess,pushSender=sendFCM}={}
       if(publicResponse)return publicResponse;
       if(url.pathname==='/v1/auth/start'&&request.method==='POST') {
         configured(env);
-        await rate(env,'start:global',60,600);
-        await rate(env,`start:${request.headers.get('CF-Connecting-IP')||'unknown'}`,10,600);
+        await edgeLimit(request,env);
+        await rate(env,`start:${clientIp(request)}`,10,600);
+        await rate(env,'start:global',START_GLOBAL_LIMIT,600);
         const input=await body(request);const deviceName=typeof input.deviceName==='string'?input.deviceName.trim().slice(0,80):'Android phone';
         const deviceCode=random();const bytes=Buffer.from(crypto.getRandomValues(new Uint8Array(4))).toString('hex').toUpperCase();const userCode=`${bytes.slice(0,4)}-${bytes.slice(4)}`;
         await env.DB.batch([env.DB.prepare('DELETE FROM auth_requests WHERE expires_at<=?').bind(now()),env.DB.prepare('DELETE FROM sessions WHERE expires_at<=?').bind(now()),env.DB.prepare('DELETE FROM rate_limits WHERE expires_at<=?').bind(now()),env.DB.prepare('INSERT INTO auth_requests(device_hash,user_code,device_name,expires_at) VALUES (?,?,?,?)').bind(await hash(deviceCode),userCode,deviceName||'Android phone',now()+600)]);
@@ -197,11 +216,13 @@ export function createPortal({accessVerifier=verifyAccess,pushSender=sendFCM}={}
       if(url.pathname==='/v1/auth/poll'&&request.method==='POST') {
         configured(env);
         const input=await body(request);if(typeof input.deviceCode!=='string'||!/^[\w-]{43}$/.test(input.deviceCode))fail(400,'invalid_request','Invalid device code.');
+        if(!await edgeLimit(request,env))await rate(env,`poll:ip:${clientIp(request)}`,120);
         const deviceHash=await hash(input.deviceCode);
-        await rate(env,'poll:global',3000);
         const p=await env.DB.prepare('SELECT email FROM auth_requests WHERE device_hash=? AND expires_at>?').bind(deviceHash,now()).first();
         if(!p)fail(410,'login_expired','Start sign-in again.');
+        // Only live device codes reach shared budget; random codes cannot drain it.
         await rate(env,`poll:${deviceHash}`,30);
+        await rate(env,'poll:global',POLL_GLOBAL_LIMIT);
         if(!p.email)return json({status:'pending'},202);
         requireAllowed(env,p.email);
         const token=random();const tokenHash=await hash(token);const id=crypto.randomUUID();const expiresAt=now()+30*86400;
@@ -231,7 +252,10 @@ export function createPortal({accessVerifier=verifyAccess,pushSender=sendFCM}={}
     } catch(e) {
       if(e instanceof HttpError)return json({error:{code:e.code,message:e.message}},e.status);
       // No exception text: SQL/JWT/library errors may contain credentials.
-      return json({error:{code:'unavailable',message:'Sign-in is temporarily unavailable.'}},503);
+      // Log only the error class and an identifier-free route label.
+      const name=typeof e?.name==='string'&&/^[A-Za-z]{1,40}$/.test(e.name)?e.name:'Error';
+      console.error('portal_request_failed',routeLabel(pathname),name);
+      return json({error:{code:'unavailable',message:signInRoute(pathname)?'Sign-in is temporarily unavailable.':'The service is temporarily unavailable. Please try again later.'}},503);
     }
   }};
 }

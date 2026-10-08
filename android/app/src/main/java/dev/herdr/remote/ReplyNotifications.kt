@@ -155,11 +155,16 @@ class ReplyNotificationService : Service() {
     }
     private fun notifyAttention(pane: Pane) {
         if (!ReplyNotifications.enabled(this) || !ReplyNotifications.hasPermission(this)) return
-        val copy = NotificationCopy.next(this, if (pane.status == "error") "error" else "needs_input", pane.kind)
-        manager.notify("attention:${monitoredCredentials?.deviceId.orEmpty()}:${pane.id}", 1, NotificationPresentation.alert(
-            this, ATTENTION_CHANNEL, copy.title, "${copy.body}\n${pane.title.ifBlank { "Conversation" }}",
-            openPane(pane.id), kindLabel(pane.kind),
-        ).build())
+        if (!pane.hasUnacknowledgedAttention()) return
+        val device = monitoredCredentials?.deviceId ?: return
+        CompletionAlerts.show(this, "attention", device, pane.id,
+            pane.attentionEventId?.takeIf(String::isNotBlank) ?: "legacy:${System.currentTimeMillis()}") {
+            val copy = NotificationCopy.next(this, if (pane.status == "error") "error" else "needs_input", pane.kind)
+            manager.notify(CompletionAlerts.slot("attention", device, pane.id), 1, NotificationPresentation.alert(
+                this, ATTENTION_CHANNEL, copy.title, "${copy.body}\n${pane.title.ifBlank { "Conversation" }}",
+                openPane(pane.id), kindLabel(pane.kind),
+            ).build())
+        }
     }
     override fun onDestroy() {
         connectivity.unregisterNetworkCallback(networkCallback)

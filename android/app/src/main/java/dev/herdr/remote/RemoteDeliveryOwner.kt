@@ -97,6 +97,7 @@ internal class RemoteDeliveryOwner(
             drafts = if (same) current.drafts - id else current.drafts,
             sentPrompts = if (draft.isBlank()) current.sentPrompts else current.sentPrompts +
                 (id to (current.sentPrompts[id].orEmpty() + draft).takeLast(10)),
+            lastPromptAt = if (draft.isBlank()) current.lastPromptAt else current.lastPromptAt + (id to System.currentTimeMillis()),
             deliveries = current.deliveries + (id to DeliveryState(receipt, "delivered", "Prompt dispatch acknowledged. Check the terminal.", "", "prompt"))) }
         recovery.schedule()
         return same

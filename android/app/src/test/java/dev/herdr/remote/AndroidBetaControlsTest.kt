@@ -10,7 +10,9 @@ class AndroidBetaControlsTest {
         val ordinary = Pane(id = "ordinary", workspaceId = "w", kind = "agent", status = "working")
         val completed = Pane(id = "completed", workspaceId = "w", kind = "agent", status = "done", completionEventId = "event-1")
 
-        assertEquals(completed, featuredDashboardPane(listOf(terminal, ordinary, completed), emptySet(), setOf("completed"), freshSnapshot = true))
+        assertNull(featuredDashboardPane(listOf(terminal, ordinary, completed), emptySet(), setOf("completed"), freshSnapshot = true))
+        assertEquals(completed, featuredDashboardPane(listOf(terminal, completed), emptySet(), setOf("completed"), freshSnapshot = true))
+        assertNull(featuredDashboardPane(listOf(completed.copy(status = "idle")), emptySet(), setOf("completed"), freshSnapshot = true))
         assertNull(featuredDashboardPane(listOf(completed), emptySet(), setOf("completed"), freshSnapshot = false))
         assertNull(featuredDashboardPane(listOf(completed), emptySet(), emptySet(), freshSnapshot = true))
         assertNull(featuredDashboardPane(listOf(completed.copy(completionAcknowledged = true)), emptySet(), setOf("completed"), freshSnapshot = true))
@@ -20,6 +22,9 @@ class AndroidBetaControlsTest {
 
         val blocked = Pane(id = "blocked", workspaceId = "w", kind = "agent", status = "blocked")
         assertEquals(blocked, featuredDashboardPane(listOf(completed, blocked), setOf("blocked"), setOf("completed"), freshSnapshot = true))
+        assertNull(featuredDashboardPane(listOf(ordinary, blocked), setOf("blocked"), emptySet(), freshSnapshot = true))
+        assertNull(featuredDashboardPane(listOf(completed, completed.copy(id = "idle", status = "idle")),
+            setOf("idle"), emptySet(), freshSnapshot = true))
     }
 
     @Test fun dashboardPromotesTheNewestEligibleSessionWithinEachPriority() {

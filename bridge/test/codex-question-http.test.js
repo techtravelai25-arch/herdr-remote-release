@@ -26,11 +26,11 @@ async function fixture(t,{agent='codex',status='working',initial='collapsed',onW
   const pane={pane_id:'w1:p1',workspace_id:'w1',tab_id:'t1',cwd:dir,agent_status:status,
     agent,terminal_id:'term',agent_session:{value:'synthetic-session'}};
   const state={kind:initial,selected:0,prompt:'Which local preview should this test use?',draft:'',
-    override:null,truncated:false,failVisible:false,visibleReads:0};
+    skipChord:'ctrl+]',override:null,truncated:false,failVisible:false,visibleReads:0};
   const calls=[];
   const screen=()=>state.override??(state.kind==='collapsed'?collapsed(' · 10s'):
-    state.kind==='expanded'?expanded(state.selected,state.prompt,state.draft):
-    state.kind==='freeText'?freeText(state.prompt,state.draft):
+    state.kind==='expanded'?expanded(state.selected,state.prompt,state.draft).replace('ctrl+]',state.skipChord):
+    state.kind==='freeText'?freeText(state.prompt,state.draft).replace('ctrl+]',state.skipChord):
     '• Messages to be submitted after next tool call\n  ↳ Which local preview should this test use? Use compact preview\n\n› Desktop draft stays intact\n  GPT-6.1-Sol high · Context 96% left');
   const herdr={call:async(method,params={})=>{
     calls.push({method,params});
@@ -87,6 +87,26 @@ test('passive output recognizes only the current collapsed cue; explicit review 
   assert.equal(question.stage,'choices');
   assert.match(question.id,/^[a-f0-9]{64}$/);
   assert.equal((await f.attach()).question.id,question.id);
+});
+
+test('caret-bracket skip footer reveals and answers a native question safely',async t=>{
+  const f=await fixture(t);
+  f.state.skipChord='^]';
+  const frame=expanded().replace('ctrl+]', '^]')
+    .replace('• Queued follow-up inputs','\u001b[1m• Queued follow-up inputs\u001b[0m');
+  assert.equal(detectCodexQuestion(frame)?.stage,'choices');
+  const collapsedOutput=await f.attach();
+  assert.equal(collapsedOutput.questionReviewAvailable,true);
+  assert.equal((await f.request(`${route}/question-review`,'POST',
+    {operationId:'caret-skip-reveal-001',attachmentId:collapsedOutput.attachmentId})).status,200);
+  const opened=await f.attach();
+  assert.equal(opened.questionAwaitingTransition,false);
+  assert.deepEqual(opened.question?.options,choices);
+  assert.equal((await f.request(`${route}/answer`,'POST',
+    {operationId:'caret-skip-answer-001',attachmentId:opened.attachmentId,
+      questionId:opened.question.id,option:0})).status,200);
+  assert.deepEqual(writes(f.calls).map(call=>call.params.keys),[['shift+left'],['enter']]);
+  assert.equal((await f.attach()).question,undefined);
 });
 
 test('native free-text-only editor is actionable after reveal and verifies its draft before Enter',async t=>{

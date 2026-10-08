@@ -34,19 +34,32 @@ internal data class CompletionAlertLedger(
         var state = prune(now)
         val cancelled = mutableListOf<String>()
         snapshot.panes.forEach { pane ->
-            val acknowledged = (pane.acknowledgedCompletionEventIds +
-                listOfNotNull(pane.completionEventId?.takeIf { pane.completionAcknowledged }))
-                .filter(String::isNotBlank).distinct()
-            acknowledged.forEach { id ->
-                listOfNotNull(localDevice?.let { "reply" to it }, cloudDevice?.let { "push" to it }).forEach { (source, device) ->
-                    val slot = "$source:$device:${pane.id}"
-                    val (next, cancel) = state.clear(slot, device, id, now)
+            val acknowledgements = listOf(
+                (pane.acknowledgedCompletionEventIds + listOfNotNull(pane.completionEventId?.takeIf { pane.completionAcknowledged })) to "reply",
+                (pane.acknowledgedAttentionEventIds + listOfNotNull(pane.attentionEventId?.takeIf { pane.attentionAcknowledged })) to "attention",
+            )
+            acknowledgements.forEach { (ids, localSource) ->
+                ids.filter(String::isNotBlank).distinct().forEach { id ->
+                    listOfNotNull(localDevice?.let { localSource to it }, cloudDevice?.let { "push" to it }).forEach { (source, device) ->
+                        val slot = "$source:$device:${pane.id}"
+                        val (next, cancel) = state.clear(slot, device, id, now)
+                        state = next
+                        if (cancel) cancelled += slot
+                    }
+                }
+            }
+            // Older local attention alerts had no event identity. Only confirmed resume clears them.
+            if (localDevice != null && pane.status in setOf("working", "idle", "done")) {
+                val slot = "attention:$localDevice:${pane.id}"
+                val id = state.current[slot]
+                if (id?.startsWith("legacy:") == true) {
+                    val (next, cancel) = state.clear(slot, localDevice, id, now)
                     state = next
                     if (cancel) cancelled += slot
                 }
             }
         }
-        return state to cancelled
+        return state to cancelled.distinct()
     }
 
     fun clear(slot: String, device: String, targetEventId: String, now: Long, deliveryEventId: String? = null): Pair<CompletionAlertLedger, Boolean> {

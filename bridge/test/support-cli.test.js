@@ -6,6 +6,7 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {Store} from '../src/store.js';
+import {readCompanionVersion} from '../src/version.js';
 
 test('account access CLI persists a named owner grant without enabling disabled remote access', t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-account-cli-'));
@@ -42,6 +43,8 @@ test('support CLI emits only safe diagnostic fields from private config and stat
   assert.equal(result.status,0,result.stderr);
   const report=JSON.parse(result.stdout);
   assert.deepEqual(Object.keys(report).sort(),['schemaVersion','generatedAt','bridgeVersion','localReady','relayConnected','sessionOwnership','remoteEnabled','pairedDeviceCount','deviceModes','terminalInputAllowedByConfig','herdrStartAllowedByConfig'].sort());
+  const release=JSON.parse(fs.readFileSync(new URL('../../ops/companion-version.json',import.meta.url),'utf8'));
+  assert.equal(report.bridgeVersion,release.version,'support reports the companion release version');
   assert.deepEqual(report.deviceModes,{observer:1,normal:0,terminal:0});
   assert.equal(report.sessionOwnership,'unknown');
   assert.equal(report.remoteEnabled,false);
@@ -51,4 +54,17 @@ test('support CLI emits only safe diagnostic fields from private config and stat
   assert.ok(!Number.isNaN(Date.parse(report.generatedAt)));
   for(const value of Object.values(privateValues))assert.equal(result.stdout.includes(value),false,`leaked ${value}`);
   assert.equal(result.stdout.includes('device-1'),false);
+});
+
+test('companion version is read from the installed release or the checkout ops file', t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-version-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const bridge=path.join(root,'bridge');fs.mkdirSync(bridge);
+  assert.equal(readCompanionVersion(bridge),'unknown');
+  fs.mkdirSync(path.join(root,'ops'));fs.writeFileSync(path.join(root,'ops','companion-version.json'),JSON.stringify({version:'1.2.3',sequence:1}));
+  assert.equal(readCompanionVersion(bridge),'1.2.3');
+  fs.writeFileSync(path.join(root,'companion-version.json'),JSON.stringify({version:'1.2.4',sequence:2}));
+  assert.equal(readCompanionVersion(bridge),'1.2.4','an installed release uses its shipped version file');
+  fs.writeFileSync(path.join(root,'companion-version.json'),JSON.stringify({version:'not a version'}));
+  assert.equal(readCompanionVersion(bridge),'1.2.3');
 });

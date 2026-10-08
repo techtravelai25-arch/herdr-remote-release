@@ -79,35 +79,77 @@ fun recoverDeliveries(archive: RecoveryArchive): RecoveryArchive = archive.copy(
     if (delivery?.status in setOf("sending", "running")) entry.copy(delivery = delivery?.copy(status = "uncertain", message = "Delivery was interrupted. Check its status before resending.")) else entry
 })
 
+internal fun Pane.hasUnacknowledgedAttention(): Boolean {
+    if (kind == "terminal" || status !in setOf("blocked", "needs_input", "error")) return false
+    val eventId = attentionEventId?.takeIf(String::isNotBlank) ?: return true
+    return !attentionAcknowledged && eventId !in acknowledgedAttentionEventIds
+}
+
 class AttentionTracker {
-    private val previous = mutableMapOf<String, String>()
+    private val previous = mutableMapOf<String, Pane>()
     private val unread = mutableSetOf<String>()
-    fun reset() { previous.clear(); unread.clear() }
-    fun read(id: String) { unread.remove(id) }
+    // A completion acknowledgement must not consume a later completion or a blocker.
+    private val unreadCompletions = mutableMapOf<String, String>()
+    private val unreadAttentions = mutableMapOf<String, String?>()
+    fun reset() { previous.clear(); unread.clear(); unreadCompletions.clear(); unreadAttentions.clear() }
+    fun read(id: String) { unread.remove(id); unreadCompletions.remove(id); unreadAttentions.remove(id) }
     fun accept(snapshot: Snapshot, selectedId: String?): Set<String> {
-        if (!snapshot.herdrOnline) return unread.toSet()
+        if (!snapshot.herdrOnline || snapshot.stale) return unread.toSet()
         val live = snapshot.panes.map { it.id }.toSet()
-        previous.keys.retainAll(live); unread.retainAll(live)
+        previous.keys.retainAll(live); unread.retainAll(live); unreadCompletions.keys.retainAll(live)
+        unreadAttentions.keys.retainAll(live)
         for (pane in snapshot.panes) {
-            val old = previous.put(pane.id, pane.status)
-            if (old != null && old != pane.status && pane.kind != "terminal" && pane.status in setOf("done", "idle", "blocked", "needs_input", "error")) {
-                if (selectedId != pane.id) unread.add(pane.id)
+            val acknowledged = pane.acknowledgedCompletionEventIds +
+                listOfNotNull(pane.completionEventId?.takeIf { pane.completionAcknowledged })
+            if (unreadCompletions[pane.id]?.let { it in acknowledged } == true) read(pane.id)
+            val acknowledgedAttention = pane.acknowledgedAttentionEventIds +
+                listOfNotNull(pane.attentionEventId?.takeIf { pane.attentionAcknowledged })
+            val legacyAttentionResumed = unreadAttentions.containsKey(pane.id) && unreadAttentions[pane.id] == null &&
+                pane.status in setOf("working", "idle", "done")
+            if (unreadAttentions[pane.id]?.let { it in acknowledgedAttention } == true ||
+                legacyAttentionResumed) read(pane.id)
+            val old = previous.put(pane.id, pane)
+            val completion = pane.status in setOf("done", "idle")
+            val eventId = pane.completionEventId?.takeIf(String::isNotBlank)
+            val attentionEventId = pane.attentionEventId?.takeIf(String::isNotBlank)
+            // Event identity also catches completion while polling missed its working state.
+            val changed = if (completion && eventId != null) old?.completionEventId != eventId
+                else if (!completion && attentionEventId != null) old?.attentionEventId != attentionEventId
+                else old?.status != pane.status
+            if (old != null && changed && pane.kind != "terminal" &&
+                pane.status in setOf("done", "idle", "blocked", "needs_input", "error") &&
+                !(legacyAttentionResumed && completion && eventId == null) &&
+                (if (completion) eventId == null || eventId !in acknowledged else pane.hasUnacknowledgedAttention())) {
+                if (selectedId != pane.id) {
+                    unread.add(pane.id)
+                    if (completion) {
+                        unreadAttentions.remove(pane.id)
+                        if (eventId != null) unreadCompletions[pane.id] = eventId
+                        else unreadCompletions.remove(pane.id)
+                    } else {
+                        unreadCompletions.remove(pane.id)
+                        unreadAttentions[pane.id] = attentionEventId
+                    }
+                }
             }
         }
-        if (selectedId != null) unread.remove(selectedId)
+        if (selectedId != null) read(selectedId)
         return unread.toSet()
     }
 }
 
 /** First observation establishes a baseline; repeat snapshots cannot re-alert. */
 class InputAttentionTracker {
-    private val previous = mutableMapOf<String, String>()
+    private val previous = mutableMapOf<String, Pane>()
     fun accept(snapshot: Snapshot): List<Pane> {
-        if (!snapshot.herdrOnline) return emptyList()
+        if (!snapshot.herdrOnline || snapshot.stale) return emptyList()
         previous.keys.retainAll(snapshot.panes.map { it.id }.toSet())
         return snapshot.panes.filter { pane ->
-            val old = previous.put(pane.id, pane.status)
-            pane.kind != "terminal" && old != null && old != pane.status && pane.status in setOf("blocked", "needs_input", "error")
+            val old = previous.put(pane.id, pane)
+            val changed = if (!pane.attentionEventId.isNullOrBlank()) old?.attentionEventId != pane.attentionEventId
+                else old?.status != pane.status
+            old != null && changed &&
+                pane.hasUnacknowledgedAttention()
         }
     }
 }

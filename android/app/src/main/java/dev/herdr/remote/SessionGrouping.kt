@@ -7,7 +7,14 @@ internal enum class SessionGrouping { PROJECT, WORKSPACE }
 internal fun decodeSessionGrouping(value: String?): SessionGrouping =
     SessionGrouping.entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: SessionGrouping.PROJECT
 
-internal data class SessionGroup(val key: String, val title: String, val detail: String?, val panes: List<Pane>)
+internal data class SessionGroup(val key: String, val title: String, val detail: String?, val panes: List<Pane>, val priority: Int)
+
+/** Active conversations lead the dashboard; idle sessions always follow the other states. */
+internal fun dashboardSessionPriority(pane: Pane): Int = when (dashboardStatus(pane.status)) {
+    DashboardStatus.WAITING, DashboardStatus.WORKING -> 0
+    DashboardStatus.IDLE -> 2
+    else -> 1
+}
 
 /** Keep unknown activity behind dated sessions, without reshuffling equal or unknown entries. */
 internal fun newestSessionsFirst(panes: List<Pane>): List<Pane> = panes.mapIndexed { index, pane ->
@@ -22,20 +29,22 @@ internal fun sessionDirectory(cwd: String): String = if (cwd.startsWith('/')) cw
 
 internal fun groupSessions(panes: List<Pane>, workspaces: List<Workspace>, grouping: SessionGrouping): List<SessionGroup> {
     val workspaceLabels = workspaces.associate { it.id to it.label }
-    // groupBy preserves first-key and member order, so each group follows its newest member.
-    return newestSessionsFirst(panes).groupBy { pane ->
-        when {
+    // Split each project/workspace across status bands so an idle member cannot
+    // appear before active work in another group. Preserve recency inside a band.
+    return newestSessionsFirst(panes).sortedBy(::dashboardSessionPriority).groupBy { pane ->
+        dashboardSessionPriority(pane) to when {
             grouping == SessionGrouping.WORKSPACE -> "workspace:${pane.workspaceId}"
             !pane.projectId.isNullOrBlank() -> "project:${pane.projectId}"
             pane.cwd.isNotBlank() -> "directory:${sessionDirectory(pane.cwd)}"
             else -> "workspace:${pane.workspaceId}"
         }
-    }.map { (key, members) ->
+    }.map { (bandAndKey, members) ->
+        val (priority, key) = bandAndKey
         val first = members.first()
         val directories = members.map { sessionDirectory(it.cwd) }.filter { it.isNotBlank() }.distinct()
         when {
             key.startsWith("workspace:") -> SessionGroup(key, workspaceLabels[first.workspaceId]?.takeIf { it.isNotBlank() }
-                ?: first.workspaceId.ifBlank { "Sessions" }, null, members)
+                ?: first.workspaceId.ifBlank { "Sessions" }, null, members, priority)
             key.startsWith("project:") -> {
                 val title = members.firstNotNullOfOrNull { it.projectLabel?.takeIf(String::isNotBlank) }
                     ?: directories.firstOrNull() ?: first.projectId.orEmpty()
@@ -44,9 +53,9 @@ internal fun groupSessions(panes: List<Pane>, workspaces: List<Workspace>, group
                     directories.firstOrNull() != title -> directories.firstOrNull()
                     else -> null
                 }
-                SessionGroup(key, title, detail, members)
+                SessionGroup(key, title, detail, members, priority)
             }
-            else -> SessionGroup(key, directories.first(), null, members)
+            else -> SessionGroup(key, directories.first(), null, members, priority)
         }
     }
 }

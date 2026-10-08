@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {Store} from '../src/store.js';
-import {createPushMonitor} from '../src/push.js';
+import {createPushMonitor,HISTORY_LIMIT} from '../src/push.js';
+import {randomUUID} from 'node:crypto';
+import {MAX_BRIDGE_RESPONSE_BYTES} from '../src/response-budget.js';
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function setup(t,fetcher=async()=>({ok:true})) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'push-test-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
@@ -75,16 +77,16 @@ test('relay-backed push rejects missing, exposed or invalid identity before tran
 });
 test('monitor emits only transitions, preserves working across unknown and excludes terminal content',async t=>{
   const calls=[];const s=setup(t,async(url,options)=>{calls.push({url,options,body:JSON.parse(options.body)});return {ok:true};});const m=s.make();
-  s.observe(m,'working');s.observe(m,'unknown');s.observe(m,'idle',{text:'secret output',title:'secret title'});await tick();
-  s.observe(m,'idle');await tick();assert.equal(calls.length,1);assert.equal(calls[0].body.kind,'done');assert.deepEqual(Object.keys(calls[0].body).sort(),['createdAt','eventId','kind','paneId']);assert.equal(calls[0].options.redirect,'error');
+  s.observe(m,'working');s.observe(m,'unknown');s.observe(m,'done',{text:'secret output',title:'secret title'});await tick();
+  s.observe(m,'done');await tick();assert.equal(calls.length,1);assert.equal(calls[0].body.kind,'done');assert.deepEqual(Object.keys(calls[0].body).sort(),['createdAt','eventId','kind','paneId']);assert.equal(calls[0].options.redirect,'error');
   s.observe(m,'blocked');await tick();assert.equal(calls.at(-1).body.kind,'needs_input');
   s.observe(m,'error');await tick();assert.equal(calls.at(-1).body.kind,'error');
-  s.observe(m,'working',{kind:'terminal'});s.observe(m,'idle',{kind:'terminal'});await tick();assert.equal(calls.length,3);
+  s.observe(m,'working',{kind:'terminal'});s.observe(m,'idle',{kind:'terminal'});await tick();assert.equal(calls.length,4);
 });
 test('durable outbox retries same event after restart without replaying agent input',async t=>{
-  const sent=[];let online=false;const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:online};});let m=s.make();s.observe(m,'working');s.observe(m,'idle');await tick();
+  const sent=[];let online=false;const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:online};});let m=s.make();s.observe(m,'working');s.observe(m,'done');await tick();
   const saved=s.store.read('push-outbox.json');assert.equal(saved.queue.length,1);m.close();online=true;m=s.make();await m.flush();assert.equal(sent.length,2);assert.equal(sent[0].eventId,sent[1].eventId);assert.equal(s.store.read('push-outbox.json').queue.length,0);
-  m.close();m=s.make();s.observe(m,'idle');await tick();assert.equal(sent.length,2);
+  m.close();m=s.make();s.observe(m,'done');await tick();assert.equal(sent.length,2);
 });
 test('persisted working state produces one completion after bridge restart and Herdr outage',async t=>{
   const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});let m=s.make();s.observe(m,'working');await tick();m.close();m=s.make();m.observe({herdrOnline:false,panes:[]});s.observe(m,'done');await tick();assert.equal(sent.length,1);assert.equal(sent[0].kind,'done');
@@ -106,14 +108,115 @@ test('a pane completion is cleared on work resumption and persists its acknowled
   assert.equal(m.annotate({panes:[{id:'w1:p1'}]}).panes[0].completionAcknowledged,true);
 });
 
-test('done to idle clears the seen completion, while working to idle creates a completion without a clear',async t=>{
+test('working to idle records a seen completion without alerting; done to idle clears its exact alert',async t=>{
   const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});const m=s.make();
-  s.observe(m,'working');s.observe(m,'idle');await tick();
-  assert.deepEqual(sent.map(e=>e.kind),['done']);const first=sent[0].eventId;
+  s.observe(m,'working');const seen=s.observe(m,'idle').panes[0];await tick();
+  assert.deepEqual(sent,[]);assert.ok(seen.completionEventId);assert.equal(seen.completionAcknowledged,true);
+  assert.deepEqual(seen.acknowledgedCompletionEventIds,[seen.completionEventId]);
   s.observe(m,'working');s.observe(m,'done');await tick();
-  assert.deepEqual(sent.map(e=>e.kind),['done','clear','done']);
-  assert.equal(sent[1].targetEventId,first);const second=sent[2].eventId;
-  s.observe(m,'idle');await tick();assert.equal(sent[3].kind,'clear');assert.equal(sent[3].targetEventId,second);
+  assert.deepEqual(sent.map(e=>e.kind),['done']);const second=sent[0].eventId;
+  s.observe(m,'idle');await tick();assert.equal(sent[1].kind,'clear');assert.equal(sent[1].targetEventId,second);
+});
+
+test('the first fresh idle snapshot clears a legacy persisted completion after restart',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});
+  s.store.write('push-outbox.json',{queue:[],states:{'w1:p1':{status:'idle',working:false,completionEventId:'legacy-completion',completionAcknowledged:false}}});
+  let m=s.make();
+  m.observe({herdrOnline:true,stale:true,panes:[{id:'w1:p1',kind:'codex',status:'idle'}]});
+  assert.equal(m.completionFor('w1:p1'),'legacy-completion');
+  const idle=s.observe(m,'idle').panes[0];await tick();
+  assert.equal(idle.completionAcknowledged,true);assert.deepEqual(idle.acknowledgedCompletionEventIds,['legacy-completion']);
+  assert.deepEqual(sent.map(e=>[e.kind,e.targetEventId]),[['clear','legacy-completion']]);
+  m.close();m=s.make();s.observe(m,'idle');await tick();assert.equal(sent.length,1);
+});
+
+test('direct idle completion remains seen across unknown, outage and restart',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});let m=s.make();
+  s.observe(m,'working');s.observe(m,'unknown');m.close();m=s.make();
+  m.observe({herdrOnline:false,panes:[]});const idle=s.observe(m,'idle').panes[0];await tick();
+  assert.equal(idle.completionAcknowledged,true);assert.deepEqual(idle.acknowledgedCompletionEventIds,[idle.completionEventId]);
+  assert.equal(m.completionFor('w1:p1'),null);assert.deepEqual(sent,[]);
+});
+
+test('resolved attention alerts clear exact IDs and retain history when a newer alert arrives',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});let m=s.make();
+  s.observe(m,'working');const a=s.observe(m,'blocked').panes[0].attentionEventId;await tick();
+  assert.ok(a);assert.equal(m.attentionFor('w1:p1'),a);assert.equal(sent[0].eventId,a);
+  for(const extra of [{herdrOnline:false},{stale:true}]) {
+    m.observe({herdrOnline:true,panes:[{id:'w1:p1',kind:'codex',status:'working'}],...extra});
+    assert.equal(m.attentionFor('w1:p1'),a);
+  }
+  const b=s.observe(m,'error').panes[0];await tick();
+  assert.notEqual(b.attentionEventId,a);assert.equal(b.attentionAcknowledged,false);assert.deepEqual(b.acknowledgedAttentionEventIds,[a]);
+  assert.equal(m.acknowledgeAttention('w1:p1',a),false);assert.equal(m.attentionFor('w1:p1'),b.attentionEventId);
+  const resolved=s.observe(m,'working').panes[0];await tick();
+  assert.equal(resolved.attentionAcknowledged,true);assert.deepEqual(resolved.acknowledgedAttentionEventIds,[a,b.attentionEventId]);
+  assert.deepEqual(sent.map(e=>e.kind),['needs_input','clear','error','clear']);
+  assert.deepEqual(sent.filter(e=>e.kind==='clear').map(e=>e.targetEventId),[a,b.attentionEventId]);
+  m.close();m=s.make();assert.equal(m.attentionFor('w1:p1'),null);
+  assert.deepEqual(m.annotate({panes:[{id:'w1:p1'}]}).panes[0].acknowledgedAttentionEventIds,[a,b.attentionEventId]);
+});
+
+test('attention clear retries from the durable outbox and a captured acknowledgement cannot clear a new alert',async t=>{
+  let online=false;const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:online};});let m=s.make();
+  s.observe(m,'working');const a=s.observe(m,'needs_input').panes[0].attentionEventId;await tick();
+  assert.equal(m.acknowledgeAttention('w1:p1',a),true);assert.equal(m.acknowledgeAttention('w1:p1',a),false);
+  m.close();m=s.make();const b=s.observe(m,'error').panes[0].attentionEventId;
+  assert.equal(m.acknowledgeAttention('w1:p1',a),false);assert.equal(m.attentionFor('w1:p1'),b);
+  await tick();online=true;s.advance(60000);await m.flush();
+  assert.deepEqual(sent.slice(-3).map(e=>[e.kind,e.targetEventId]),[['needs_input',undefined],['clear',a],['error',undefined]]);
+  assert.equal(s.store.read('push-outbox.json').queue.length,0);
+});
+
+test('done and idle both resolve pending attention without guessing during unknown status',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});const m=s.make();
+  s.observe(m,'working');const a=s.observe(m,'blocked').panes[0].attentionEventId;
+  s.observe(m,'unknown');assert.equal(m.attentionFor('w1:p1'),a);
+  s.observe(m,'done');const b=s.observe(m,'error').panes[0].attentionEventId;s.observe(m,'idle');await tick();
+  assert.deepEqual(sent.filter(e=>e.kind==='clear').map(e=>e.targetEventId),[a,b]);
+});
+
+test('unknown and blocked aliases preserve the attention identity without re-alerting across restart',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});let m=s.make();
+  s.observe(m,'working');const first=s.observe(m,'blocked').panes[0].attentionEventId;await tick();
+  s.observe(m,'needs_input');s.observe(m,'unknown');m.close();m=s.make();
+  const restored=s.observe(m,'blocked').panes[0];await tick();
+  assert.equal(restored.attentionEventId,first);assert.equal(restored.attentionAcknowledged,false);
+  assert.deepEqual(restored.acknowledgedAttentionEventIds,[]);assert.deepEqual(sent.map(e=>e.kind),['needs_input']);
+  assert.equal(m.acknowledgeAttention('w1:p1',first),true);await tick();
+  s.observe(m,'unknown');const seen=s.observe(m,'needs_input').panes[0];await tick();
+  assert.equal(seen.attentionEventId,first);assert.equal(seen.attentionAcknowledged,true);
+  assert.deepEqual(sent.map(e=>e.kind),['needs_input','clear']);
+  s.observe(m,'working');s.observe(m,'unknown');const newer=s.observe(m,'blocked').panes[0];await tick();
+  assert.notEqual(newer.attentionEventId,first);assert.equal(newer.attentionAcknowledged,false);
+  assert.deepEqual(sent.map(e=>e.kind),['needs_input','clear','needs_input']);
+});
+
+test('unknown to a different attention kind clears the old identity and creates a new one',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});const m=s.make();
+  s.observe(m,'working');const first=s.observe(m,'blocked').panes[0].attentionEventId;
+  s.observe(m,'unknown');const next=s.observe(m,'error').panes[0];await tick();
+  assert.notEqual(next.attentionEventId,first);assert.equal(next.attentionAcknowledged,false);
+  assert.deepEqual(next.acknowledgedAttentionEventIds,[first]);
+  assert.deepEqual(sent.map(e=>e.kind),['needs_input','clear','error']);assert.equal(sent[1].targetEventId,first);
+});
+
+test('legacy attention status infers its kind before unknown and same-kind restoration',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});
+  s.store.write('push-outbox.json',{queue:[],states:{'w1:p1':{status:'blocked',working:false,attentionEventId:'legacy-attention',attentionAcknowledged:false}}});
+  const m=s.make();s.observe(m,'unknown');const restored=s.observe(m,'needs_input').panes[0];await tick();
+  assert.equal(restored.attentionEventId,'legacy-attention');assert.equal(restored.attentionAcknowledged,false);assert.deepEqual(sent,[]);
+});
+
+test('local attention state retains at most HISTORY_LIMIT exact acknowledged IDs',t=>{
+  const s=setup(t);const m=createPushMonitor({},s.store);t.after(()=>m.close());
+  s.observe(m,'working');const ids=[];
+  for(let i=0;i<130;i++) {
+    const pane=s.observe(m,'blocked').panes[0];ids.push(pane.attentionEventId);
+    assert.equal(m.acknowledgeAttention('w1:p1',pane.attentionEventId),true);s.observe(m,'working');
+  }
+  assert.deepEqual(m.annotate({panes:[{id:'w1:p1'}]}).panes[0].acknowledgedAttentionEventIds,ids.slice(-HISTORY_LIMIT));
+  assert.deepEqual(s.store.read('push-outbox.json').queue,[]);
 });
 
 test('a prompt acknowledgement targets only the captured completion identity',async t=>{
@@ -163,7 +266,7 @@ test('acknowledged A remains in the snapshot after newer B completes and after r
   assert.equal(m.completionFor('w1:p1'),b.completionEventId);
 });
 
-test('acknowledged completion history is bounded to the latest 128 exact IDs',t=>{
+test('acknowledged completion history is bounded to the latest HISTORY_LIMIT exact IDs',t=>{
   const s=setup(t);const m=createPushMonitor({},s.store);t.after(()=>m.close());
   const pane=status=>({herdrOnline:true,panes:[{id:'w1:p1',kind:'codex',status}]});
   m.observe(pane('working'));
@@ -174,9 +277,9 @@ test('acknowledged completion history is bounded to the latest 128 exact IDs',t=
     if(i<129)m.observe(pane('working'));
   }
   const visible=m.annotate(pane('done')).panes[0];
-  assert.deepEqual(visible.acknowledgedCompletionEventIds,ids.slice(-128));
+  assert.deepEqual(visible.acknowledgedCompletionEventIds,ids.slice(-HISTORY_LIMIT));
   assert.equal(visible.completionEventId,ids.at(-1));assert.equal(visible.completionAcknowledged,true);
-  assert.deepEqual(s.store.read('push-outbox.json').states['w1:p1'].acknowledgedCompletionEventIds,ids.slice(-128));
+  assert.deepEqual(s.store.read('push-outbox.json').states['w1:p1'].acknowledgedCompletionEventIds,ids.slice(-HISTORY_LIMIT));
 });
 
 test('stale and offline snapshots cannot acknowledge or discard a pending completion',t=>{
@@ -205,4 +308,24 @@ test('outbox trimming during delivery does not discard a different queued event'
   release();await tick();
   assert.deepEqual(sent.slice(1).map(e=>e.eventId),queued);
   assert.equal(s.store.read('push-outbox.json').queue.length,0);
+});
+
+test('snapshots with many long-lived panes stay within the relay response budget',t=>{
+  const s=setup(t),ids=()=>Array.from({length:128},()=>randomUUID()),states={},panes=[];
+  // Saturated histories persisted by an older companion are trimmed on read.
+  for(let i=0;i<100;i++) {
+    const id=`w${i}:p${i}`;panes.push({id,workspaceId:`w${i}`,tabId:`w${i}:t1`,title:'Session title',cwd:'/home/user/project',kind:'codex',
+      status:'idle',lastActivity:new Date().toISOString(),revision:1000,projectId:'home',projectLabel:'Home'});
+    states[id]={status:'idle',working:false,completionEventId:randomUUID(),completionAcknowledged:true,acknowledgedCompletionEventIds:ids(),
+      attentionEventId:randomUUID(),attentionAcknowledged:true,acknowledgedAttentionEventIds:ids()};
+  }
+  s.store.write('push-outbox.json',{queue:[],states});
+  const m=createPushMonitor({},s.store);t.after(()=>m.close());
+  const snapshot=m.annotate({herdrOnline:true,panes});
+  for(const pane of snapshot.panes) {
+    assert.equal(pane.acknowledgedCompletionEventIds.length,HISTORY_LIMIT);
+    const state=states[pane.id];
+    assert.deepEqual(pane.acknowledgedAttentionEventIds,[...state.acknowledgedAttentionEventIds,state.attentionEventId].slice(-HISTORY_LIMIT));
+  }
+  assert.ok(Buffer.byteLength(JSON.stringify(snapshot))<MAX_BRIDGE_RESPONSE_BYTES/2);
 });

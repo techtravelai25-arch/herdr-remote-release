@@ -1,8 +1,0 @@
-• Messages to be submitted after next tool call (press esc to interrupt and send immediately)
-  ↳ > Which connection recovery should we test?
-
-    Refresh session
-
-› Keep this desktop draft
-
-  tab to queue message                                                                                97% context left

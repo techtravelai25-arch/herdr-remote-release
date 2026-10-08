@@ -42,9 +42,15 @@ internal object CompletionAlerts {
     fun reconcile(context: Context, snapshot: Snapshot, localDevice: String?, cloudDevice: String?) = synchronized(this) {
         val previous = load(context)
         val (next, cancelled) = previous.reconcile(snapshot, localDevice, cloudDevice, System.currentTimeMillis())
-        if (cancelled.isEmpty() && next == previous) return@synchronized
-        save(context, next)
+        if (next != previous) save(context, next)
         val manager = context.getSystemService(NotificationManager::class.java)
+        // Upgrade cleanup for local attention notifications posted before ledger tracking existed.
+        if (snapshot.herdrOnline && !snapshot.stale && localDevice != null) {
+            snapshot.panes.filter { it.status in setOf("working", "idle", "done") }.forEach { pane ->
+                val tag = slot("attention", localDevice, pane.id)
+                if (next.current[tag] == null) manager.cancel(tag, NOTIFICATION_ID)
+            }
+        }
         cancelled.forEach { manager.cancel(it, NOTIFICATION_ID) }
     }
 }

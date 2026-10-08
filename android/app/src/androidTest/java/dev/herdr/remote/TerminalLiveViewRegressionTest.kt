@@ -112,6 +112,100 @@ class TerminalLiveViewRegressionTest {
         listOf("Only the staging laptop", "The production laptop after verification", "Other"),
         selectedIndex = 0, freeText = true, stage = "choices")
 
+    private val savedHistory = StructuredHistory(available = true, source = "claude",
+        messages = listOf(HistoryMessage("reply", "assistant", "The recommendation is in the plan file.")))
+    private val planMenu = "Would you like to proceed?\n❯ 1. Yes, manually approve edits\n  2. No, keep planning"
+
+    @Test
+    fun claudeApprovalShowsLiveMenuDespiteSavedHistoryAndRestoresConversation() {
+        var pane by mutableStateOf(Pane("claude-plan", "workspace", kind = "claude", status = "working"))
+        val keys = mutableListOf<String>()
+        compose.setContent { TestTerminal(fakeState(pane, output = planMenu).copy(structuredHistory = savedHistory),
+            pane, onKey = { keys += it }) }
+        compose.onNodeWithText("Conversation · Claude Code").assertExists()
+        compose.onNodeWithText(planMenu).assertDoesNotExist()
+        compose.runOnIdle { pane = pane.copy(status = "blocked") }
+        compose.onNodeWithText("Live terminal question").assertExists()
+        compose.onNodeWithText(planMenu).assertIsDisplayed()
+        compose.onNodeWithText("Next").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(listOf("down"), keys) }
+        compose.onNodeWithContentDescription("Conversation options").performScrollTo().performClick()
+        compose.onNodeWithText("Show conversation").performClick()
+        compose.onNodeWithText("Conversation · Claude Code").assertExists()
+        compose.onNodeWithText("Show live question").performScrollTo().performClick()
+        compose.onNodeWithText(planMenu).performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { pane = pane.copy(status = "working") }
+        compose.onNodeWithText("Conversation · Claude Code").assertExists()
+        compose.onNodeWithText("Show live question").assertDoesNotExist()
+        compose.runOnIdle { pane = pane.copy(status = "needs-input") }
+        compose.onNodeWithText(planMenu).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Conversation options").performScrollTo().performClick()
+        compose.onNodeWithText("Show conversation").performClick()
+        compose.runOnIdle { pane = pane.copy(id = "another-claude-pane") }
+        compose.onNodeWithText("Live terminal question").assertExists()
+    }
+
+    @Test
+    fun terminalQuestionBypassesHistoryLoadingAndPausedOldOutput() {
+        var pane by mutableStateOf(Pane("claude-plan", "workspace", kind = "claude", status = "working"))
+        var output by mutableStateOf("Old terminal output")
+        var loading by mutableStateOf(false)
+        compose.setContent { TestTerminal(fakeState(pane, output = output).copy(historyLoading = loading), pane) }
+        compose.onNodeWithContentDescription("Conversation options").performClick()
+        compose.onNodeWithText("Pause auto-scroll").performClick()
+        compose.runOnIdle {
+            pane = pane.copy(status = "needs_input")
+            output = planMenu
+            loading = true
+        }
+        compose.onNodeWithText(planMenu).assertIsDisplayed()
+        compose.onNodeWithText("Old terminal output").assertDoesNotExist()
+        compose.onNodeWithText("Loading conversation…").assertDoesNotExist()
+    }
+
+    @Test
+    fun queuedQuestionAndOpeningStateShowLiveTextUntilNativeChoicesArrive() {
+        val pane = codexPane(status = "blocked")
+        val liveQuestion = "Which deployment should receive the fix?\n  1. Staging only\n  2. Production after verification\n  enter submit   ^] skip   shift+→ main prompt"
+        var pending by mutableStateOf(false)
+        var question by mutableStateOf<BridgeQuestion?>(null)
+        var reviews = 0
+        compose.setContent { TestTerminal(fakeState(pane, output = liveQuestion, question = question,
+            questionReviewAvailable = !pending && question == null, questionPending = pending)
+            .copy(structuredHistory = savedHistory), pane, onReviewQuestion = { reviews++; pending = true }) }
+        compose.onNodeWithText("Live terminal question").assertExists()
+        compose.onNodeWithText(liveQuestion).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Review question").performScrollTo().performClick()
+        compose.onNodeWithText("Opening question…").assertIsNotEnabled()
+        compose.onNodeWithText(liveQuestion).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Send prompt").assertIsNotEnabled()
+        compose.runOnIdle {
+            assertEquals(1, reviews)
+            pending = false
+            question = choicesQuestion()
+        }
+        compose.onNodeWithText("Conversation · Codex").assertExists()
+        compose.onNodeWithText(liveQuestion).assertDoesNotExist()
+        compose.onNodeWithText("Only the staging laptop").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Opening question…").assertDoesNotExist()
+    }
+
+    @Test
+    fun nativeQuestionKeepsSavedConversationVisible() {
+        val pane = codexPane(status = "blocked")
+        var question by mutableStateOf<BridgeQuestion?>(null)
+        compose.setContent { TestTerminal(fakeState(pane, output = planMenu, question = question)
+            .copy(structuredHistory = savedHistory), pane) }
+        compose.onNodeWithText("Live terminal question").assertExists()
+        compose.runOnIdle { question = choicesQuestion() }
+        compose.onNodeWithText("Conversation · Codex").assertExists()
+        compose.onNodeWithText(planMenu).assertDoesNotExist()
+        compose.onNodeWithText("Only the staging laptop").assertExists()
+        compose.onNodeWithText("Answer in the terminal").assertDoesNotExist()
+        compose.runOnIdle { question = null }
+        compose.onNodeWithText("Live terminal question").assertExists()
+    }
+
     @Test
     fun multilineDraftKeepsReaderVisibleAndComposerReachableInLandscape() {
         val pane = Pane("landscape-terminal", "workspace", kind = "terminal", status = "idle")

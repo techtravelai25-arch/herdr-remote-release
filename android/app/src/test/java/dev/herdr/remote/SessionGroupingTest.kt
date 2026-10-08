@@ -6,8 +6,8 @@ import org.junit.Test
 
 class SessionGroupingTest {
     private fun pane(id: String, workspace: String, cwd: String, project: String? = null, label: String? = null,
-                     activity: String? = null) =
-        Pane(id, workspace, cwd = cwd, projectId = project, projectLabel = label, lastActivity = activity)
+                     activity: String? = null, status: String = "unknown") =
+        Pane(id, workspace, cwd = cwd, projectId = project, projectLabel = label, lastActivity = activity, status = status)
 
     @Test fun sameProjectAcrossWorkspacesStaysTogetherInOriginalOrder() {
         val panes = listOf(pane("a", "one", "/repo/src", "repo", "App"), pane("b", "two", "/other", "other"),
@@ -72,6 +72,31 @@ class SessionGroupingTest {
             pane("c", "one", "/app/link/../src"), pane("d", "one", "/app/src")), emptyList(), SessionGrouping.PROJECT)
         assertEquals(4, groups.size)
         assertEquals("/", sessionDirectory("/"))
+    }
+
+    @Test fun activeSessionsAcrossProjectsPrecedeIdleEvenWhenIdleIsNewer() {
+        val groups = groupSessions(listOf(
+            pane("idle-a", "one", "/a", "a", activity = "2026-01-05T00:00:00Z", status = "idle"),
+            pane("working-b", "two", "/b", "b", activity = "2026-01-02T00:00:00Z", status = "working"),
+            pane("waiting-a", "one", "/a", "a", activity = "2026-01-01T00:00:00Z", status = "needs_input"),
+            pane("done-c", "three", "/c", "c", activity = "2026-01-04T00:00:00Z", status = "done"),
+        ), emptyList(), SessionGrouping.PROJECT)
+
+        assertEquals(listOf("working-b", "waiting-a", "done-c", "idle-a"),
+            groups.flatMap { it.panes }.map { it.id })
+        assertEquals(listOf(0, 0, 1, 2), groups.map { it.priority })
+    }
+
+    @Test fun workspaceGroupingSplitsActiveAndIdleMembersWithoutPuttingIdleAboveAnotherWorkspace() {
+        val groups = groupSessions(listOf(
+            pane("idle-a", "one", "/a", status = "idle"),
+            pane("working-b", "two", "/b", status = "working"),
+            pane("waiting-a", "one", "/a", status = "needs-input"),
+        ), emptyList(), SessionGrouping.WORKSPACE)
+
+        assertEquals(listOf("working-b", "waiting-a", "idle-a"), groups.flatMap { it.panes }.map { it.id })
+        assertEquals(listOf("workspace:two", "workspace:one", "workspace:one"), groups.map { it.key })
+        assertEquals(groups.size, groups.map { "${it.priority}:${it.key}" }.distinct().size)
     }
 
     @Test fun groupingPreferenceDefaultsToProjectAndDecodesWorkspace() {

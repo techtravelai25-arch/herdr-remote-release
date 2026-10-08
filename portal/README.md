@@ -6,7 +6,7 @@ The portal adds an encrypted relay, optional account sign-in and laptop director
 
 ## Check locally
 
-Run `npm ci`, `npm run types`, `npm run check`, `npm test`, and `npm run dry-run` from this directory. The dry-run script creates an empty local assets directory; it does not deploy the Worker.
+Run `npm ci`, `npm run types`, `npm run check`, `npm test`, and `npm run dry-run` from this directory. The dry-run script creates an empty local assets directory; it does not deploy the Worker. Migration number `0006` is intentionally absent; never reuse it.
 
 ## Configure your portal
 

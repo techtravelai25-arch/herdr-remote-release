@@ -27,9 +27,10 @@ import kotlinx.serialization.Serializable
     val mode: String = "options",
     val ansi: String? = null,
     val text: String? = null,
+    val note: String? = null,
 ) {
     fun isValid(): Boolean = id.isNotBlank() && title.isNotBlank() && provider in setOf("codex", "claude", "opencode") &&
-        stage in setOf("model", "reasoning") && when (mode) {
+        stage in setOf("model", "reasoning", "confirm") && when (mode) {
             "terminal" -> provider == "opencode" && !ansi.orEmpty().ifBlank { text.orEmpty() }.isBlank()
             "options" -> options.isNotEmpty() && options.size <= 50 && options.all { it.isNotBlank() } && selectedIndex in options.indices
             else -> false
@@ -63,14 +64,24 @@ internal fun modelUnavailableMessage(state: RemoteState, pane: Pane?): String = 
     else -> "Model controls are temporarily unavailable."
 }
 
+/** Claude pads each model name and its description with a run of spaces; show them as a title and a quieter second line. */
+internal fun modelOptionParts(provider: String, option: String): Pair<String, String?> {
+    if (provider != "claude") return option to null
+    val parts = option.trim().split(Regex("\\s{2,}"), limit = 2)
+    return if (parts.size == 2 && parts[1].isNotBlank()) parts[0] to parts[1] else option.trim() to null
+}
+
 /** The native CLI owns the available models and the next step; nothing is hard-coded here. */
 @Composable internal fun CodexModelDialog(menu: CodexModelMenu, enabled: Boolean, busy: Boolean,
     onSelect: (Int) -> Unit, onCancel: () -> Unit, onDismiss: () -> Unit, onKey: (String) -> Unit = {}) {
     AlertDialog(onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text(if (menu.stage == "reasoning") "Reasoning effort" else "Change model") },
+        title = { Text(when (menu.stage) { "reasoning" -> "Reasoning effort"; "confirm" -> "Confirm model change"; else -> "Change model" }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(menu.title, style = MaterialTheme.typography.bodyMedium)
+                menu.note?.takeIf { it.isNotBlank() }?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 if (!enabled && !busy) Text("Model controls are temporarily unavailable.", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (menu.mode == "terminal") {
@@ -99,7 +110,11 @@ internal fun modelUnavailableMessage(state: RemoteState, pane: Pane?): String = 
                             role = Role.RadioButton, onClick = { onSelect(index) }).padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         RadioButton(selected = menu.selectedIndex == index, onClick = null, enabled = enabled)
-                        Text(option, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                        val (name, detail) = modelOptionParts(menu.provider, option)
+                        Column(Modifier.weight(1f)) {
+                            Text(name, style = MaterialTheme.typography.bodyMedium)
+                            detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        }
                     }
                 }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())

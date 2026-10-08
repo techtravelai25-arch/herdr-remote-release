@@ -8,7 +8,7 @@ const header = /^\s*[•●]\s+Queued follow-up inputs\s*$/;
 const queueCount = /^\s*\?\s+[1-9]\d*\s+questions?(?:\s*·\s*\d+s)?\s*$/i;
 const queueHint = /^\s*shift\s*\+\s*←\s+to\s+answer\s*$/i;
 const row = /^\s{2,4}([›❯])?\s*(\d{1,2})\.\s+(.+?)\s*$/;
-const footer = /^\s*enter\s+submit\s+ctrl\s*\+\s*\]\s+skip\s+shift\s*\+\s*→\s+(?:main prompt|prev question)(?:\s+shift\s*\+\s*←\s+(?:next question|queued messages))?\s*$/i;
+const footer = /^\s*enter\s+submit\s+(?:ctrl\s*\+\s*\]|\^\])\s+skip\s+shift\s*\+\s*→\s+(?:main prompt|prev question)(?:\s+shift\s*\+\s*←\s+(?:next question|queued messages))?\s*$/i;
 const clean = text => stripVTControlCharacters(text).replace(/[\u2800-\u28ff]/g, ' ').split('\n');
 
 // Codex 0.159.2's ChatComposer::render_inline_input renders the empty

@@ -40,7 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 
-/** Keep live blockers/errors first, then surface a newly unread completion ahead of ordinary sessions. */
+/** Feature attention when it does not put inactive work ahead of active sessions. */
 internal fun featuredDashboardPane(
     panes: List<Pane>,
     attentionIds: Set<String>,
@@ -48,10 +48,12 @@ internal fun featuredDashboardPane(
     freshSnapshot: Boolean,
 ): Pane? {
     val recentPanes = newestSessionsFirst(panes)
-    return recentPanes.firstOrNull { it.id in attentionIds } ?: if (freshSnapshot) {
+    val activePanes = recentPanes.filter { dashboardSessionPriority(it) == 0 }
+    if (activePanes.isNotEmpty()) return activePanes.firstOrNull { it.id in attentionIds }
+    return recentPanes.firstOrNull { it.id in attentionIds && dashboardSessionPriority(it) < 2 } ?: if (freshSnapshot) {
         recentPanes.firstOrNull { pane ->
             val eventId = pane.completionEventId
-            pane.id in unreadIds && pane.kind != "terminal" && pane.status in setOf("done", "idle") &&
+            pane.id in unreadIds && pane.kind != "terminal" && dashboardStatus(pane.status) == DashboardStatus.DONE &&
                 eventId != null && eventId.isNotBlank() && !pane.completionAcknowledged &&
                 eventId !in pane.acknowledgedCompletionEventIds
         }
@@ -241,7 +243,7 @@ internal fun featuredDashboardPane(
                 }
             }
             groupSessions(listed, state.snapshot.workspaces, grouping).forEach { group ->
-                item(key = "group:${group.key}") {
+                item(key = "group:${group.priority}:${group.key}") {
                     val pathTitle = group.title.startsWith('/')
                     SessionGroupHeading(
                         if (pathTitle) group.title.trimEnd('/').substringAfterLast('/').ifBlank { group.title } else group.title,

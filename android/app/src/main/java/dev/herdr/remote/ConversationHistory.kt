@@ -11,12 +11,27 @@ import androidx.compose.ui.unit.dp
 import kotlinx.serialization.Serializable
 
 @Serializable data class HistoryMessage(val id: String, val role: String, val text: String, val timestamp: String? = null, val toolName: String? = null)
-@Serializable data class StructuredHistory(val messages: List<HistoryMessage> = emptyList(), val source: String = "terminal", val available: Boolean = false, val hasMore: Boolean = false, val nextCursor: String? = null, val reason: String? = null)
+@Serializable data class StructuredHistory(val messages: List<HistoryMessage> = emptyList(), val source: String = "terminal", val available: Boolean = false, val hasMore: Boolean = false, val nextCursor: String? = null, val reason: String? = null, val revision: String? = null, val unchanged: Boolean = false)
 @Serializable data class ActivityEvent(val id: String, val paneId: String, val title: String, val kind: String, val status: String, val previousStatus: String? = null, val timestamp: String)
 @Serializable data class ActivityTimeline(val events: List<ActivityEvent> = emptyList(), val startedAt: String? = null)
 
 internal fun prependHistory(older: StructuredHistory, current: StructuredHistory?): StructuredHistory =
-    older.copy(messages = (older.messages + current?.messages.orEmpty()).distinctBy { it.id })
+    older.copy(messages = (older.messages + current?.messages.orEmpty()).distinctBy { it.id },
+        revision = current?.revision ?: older.revision)
+
+/**
+ * Fold the newest page into what is already loaded. Message ids are stable per transcript record, so
+ * earlier pages stay in place when the newest page overlaps them; otherwise the older pages no longer
+ * join up and the newest page stands alone.
+ */
+internal fun mergeLatestHistory(current: StructuredHistory?, latest: StructuredHistory): StructuredHistory {
+    if (current == null || !current.available || !latest.available || current.source != latest.source) return latest
+    val first = latest.messages.firstOrNull() ?: return latest
+    val overlap = current.messages.indexOfFirst { it.id == first.id }
+    if (overlap < 0) return latest
+    return latest.copy(messages = current.messages.take(overlap) + latest.messages,
+        hasMore = current.hasMore, nextCursor = current.nextCursor)
+}
 
 internal fun conversationTranscriptBlocks(history: StructuredHistory?, liveBlocks: List<TerminalBlock>, sentPrompts: List<String> = emptyList()): List<TerminalBlock> {
     val saved = history?.takeIf { it.available && it.messages.isNotEmpty() }?.messages

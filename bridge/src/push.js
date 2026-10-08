@@ -4,15 +4,21 @@ import {randomUUID} from 'node:crypto';
 import {normalizeHttpsOrigin} from './pairing.js';
 
 const TTL=86400000;
-const HISTORY_LIMIT=128;
+// Every snapshot carries this history for each pane, and relayed snapshots
+// share a 240 KB response budget. The app tombstones each ID it sees for 72 h
+// and the latest event also travels as {type}EventId/{type}Acknowledged, so
+// the list only bridges acknowledgements made between two app observations.
+export const HISTORY_LIMIT=8;
 const completionId=id=>typeof id==='string'&&/^[\w-]{1,80}$/.test(id);
-function acknowledgedHistory(state) {
-  const ids=Array.isArray(state?.acknowledgedCompletionEventIds)?state.acknowledgedCompletionEventIds:[];
+function acknowledgedHistory(state,type='completion') {
+  const history=type==='attention'?'acknowledgedAttentionEventIds':'acknowledgedCompletionEventIds';
+  const ids=Array.isArray(state?.[history])?state[history]:[];
   const unique=[...new Set(ids.filter(completionId))].slice(-HISTORY_LIMIT);
-  const latest=state?.completionAcknowledged&&completionId(state.completionEventId)?state.completionEventId:null;
+  const latest=state?.[`${type}Acknowledged`]&&completionId(state[`${type}EventId`])?state[`${type}EventId`]:null;
   return latest&&!unique.includes(latest)?[...unique,latest].slice(-HISTORY_LIMIT):unique;
 }
 const appendAcknowledged=(history,id)=>history.includes(id)?history:[...history,id].slice(-HISTORY_LIMIT);
+const attentionKind=status=>(status==='blocked'||status==='needs_input')?'needs_input':status==='error'?'error':null;
 function relaySender(store) {
   const file=path.join(store.dir,'relay-identity.json');
   const privateError='Cloud push relay identity must be private (0600)';
@@ -49,7 +55,7 @@ function relaySender(store) {
   } catch { throw Error('Invalid cloud push relay identity'); }
   return {origin:identity.url,id:identity.id,token:identity.relayToken};
 }
-/** Durable pane completion state and, when configured, a status-only cloud outbox. */
+/** Durable pane alert state and, when configured, a status-only cloud outbox. */
 export function createPushMonitor(config,store,{fetcher=fetch,now=Date.now,interval=5000}={}) {
   const c=config.cloudPush;
   let sender;
@@ -77,21 +83,36 @@ export function createPushMonitor(config,store,{fetcher=fetch,now=Date.now,inter
     const state=data.states[paneId];
     return state?.completionEventId&&!state.completionAcknowledged?state.completionEventId:null;
   }
-  function acknowledge(paneId,targetEventId=completionFor(paneId)) {
-    if(!targetEventId||completionFor(paneId)!==targetEventId)return false;
-    data.states[paneId].completionAcknowledged=true;
-    data.states[paneId].acknowledgedCompletionEventIds=appendAcknowledged(acknowledgedHistory(data.states[paneId]),targetEventId);
-    if(c)data.queue.push(event(paneId,'clear',targetEventId));
+  function attentionFor(paneId) {
+    const state=data.states[paneId];
+    return state?.attentionEventId&&!state.attentionAcknowledged?state.attentionEventId:null;
+  }
+  function acknowledgeState(state,paneId,type) {
+    const id=state[`${type}EventId`];
+    if(!id||state[`${type}Acknowledged`])return false;
+    state[`${type}Acknowledged`]=true;
+    const history=type==='attention'?'acknowledgedAttentionEventIds':'acknowledgedCompletionEventIds';
+    state[history]=appendAcknowledged(acknowledgedHistory(state,type),id);
+    if(c)data.queue.push(event(paneId,'clear',id));
+    return true;
+  }
+  function acknowledgeEvent(paneId,targetEventId,type) {
+    const current=type==='attention'?attentionFor(paneId):completionFor(paneId);
+    if(!targetEventId||current!==targetEventId)return false;
+    acknowledgeState(data.states[paneId],paneId,type);
     data.queue=data.queue.slice(-128);
     save();
     if(c)void flush();
     return true;
   }
+  const acknowledge=(paneId,targetEventId=completionFor(paneId))=>acknowledgeEvent(paneId,targetEventId,'completion');
+  const acknowledgeAttention=(paneId,targetEventId=attentionFor(paneId))=>acknowledgeEvent(paneId,targetEventId,'attention');
   function annotate(snapshot) {
     return {...snapshot,panes:snapshot.panes.map(pane=>{
       const state=data.states[pane.id];
       return {...pane,completionEventId:state?.completionEventId??null,completionAcknowledged:state?.completionAcknowledged??false,
-        acknowledgedCompletionEventIds:acknowledgedHistory(state)};
+        acknowledgedCompletionEventIds:acknowledgedHistory(state),attentionEventId:state?.attentionEventId??null,
+        attentionAcknowledged:state?.attentionAcknowledged??false,acknowledgedAttentionEventIds:acknowledgedHistory(state,'attention')};
     })};
   }
   async function flush() {
@@ -121,23 +142,31 @@ export function createPushMonitor(config,store,{fetcher=fetch,now=Date.now,inter
       const previous=data.states[pane.id];
       const status=pane.status;
       const working=status==='working'||(status==='unknown'&&previous?.working===true);
+      const previousAttentionKind=previous?.attentionKind??attentionKind(previous?.status);
       const next={status,working,completionEventId:previous?.completionEventId??null,completionAcknowledged:previous?.completionAcknowledged??false,
-        acknowledgedCompletionEventIds:acknowledgedHistory(previous)};
-      const kind=(status==='blocked'||status==='needs_input')?'needs_input':status==='error'?'error':(status==='done'||status==='idle')&&previous?.working?'done':null;
+        acknowledgedCompletionEventIds:acknowledgedHistory(previous),attentionEventId:previous?.attentionEventId??null,
+        attentionAcknowledged:previous?.attentionAcknowledged??false,acknowledgedAttentionEventIds:acknowledgedHistory(previous,'attention'),
+        attentionKind:status==='unknown'?previousAttentionKind:attentionKind(status)};
+      const kind=attentionKind(status)??((status==='done'||status==='idle')&&previous?.working?'done':null);
+      // Unknown is a gap in status knowledge, not a new alert generation.
+      // blocked and needs_input describe the same outstanding attention.
+      const sameAttention=attentionKind(status)&&attentionKind(status)===previousAttentionKind&&
+        (previous?.status==='unknown'||attentionKind(previous?.status)===attentionKind(status));
+      // Herdr's idle status means the result was seen in the focused PC pane.
+      // Reconcile persisted idle completions too, including after an upgrade.
+      if(previous&&(status==='working'||status==='idle'))acknowledgeState(next,pane.id,'completion');
+      if(previous&&(['working','idle','done'].includes(status)||
+        (previous.status!==status&&(kind==='needs_input'||kind==='error')&&!sameAttention)))acknowledgeState(next,pane.id,'attention');
       if(previous&&previous.status!==status) {
-        if(status==='working'||(previous.status==='done'&&status==='idle')) {
-          if(next.completionEventId&&!next.completionAcknowledged) {
-            next.completionAcknowledged=true;
-            next.acknowledgedCompletionEventIds=appendAcknowledged(next.acknowledgedCompletionEventIds,next.completionEventId);
-            if(c)data.queue.push(event(pane.id,'clear',next.completionEventId));
-          }
-        }
         // First observation never alerts for old work. A new completion gets
-        // its own identity, including when the agent goes directly to idle.
-        if(kind) {
+        // its own identity. Direct idle completions are already seen on PC.
+        if(kind&&!sameAttention) {
           const emitted=event(pane.id,kind);
-          if(kind==='done') {next.completionEventId=emitted.eventId;next.completionAcknowledged=false;}
-          if(c)data.queue.push(emitted);
+          if(kind==='done') {
+            next.completionEventId=emitted.eventId;next.completionAcknowledged=status==='idle';
+            if(next.completionAcknowledged)next.acknowledgedCompletionEventIds=appendAcknowledged(next.acknowledgedCompletionEventIds,emitted.eventId);
+          } else {next.attentionEventId=emitted.eventId;next.attentionAcknowledged=false;}
+          if(c&&!(kind==='done'&&status==='idle'))data.queue.push(emitted);
         }
       }
       states[pane.id]=next;
@@ -149,5 +178,5 @@ export function createPushMonitor(config,store,{fetcher=fetch,now=Date.now,inter
     return annotate(snapshot);
   }
   const timer=c?setInterval(()=>{void flush();},interval):null;timer?.unref();
-  return {enabled:!!c,tracking:true,observe,annotate,completionFor,acknowledge,flush,close(){closed=true;if(timer)clearInterval(timer);}};
+  return {enabled:!!c,tracking:true,observe,annotate,completionFor,acknowledge,attentionFor,acknowledgeAttention,flush,close(){closed=true;if(timer)clearInterval(timer);}};
 }

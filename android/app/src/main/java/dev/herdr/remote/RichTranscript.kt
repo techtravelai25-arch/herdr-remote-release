@@ -54,13 +54,13 @@ import androidx.compose.ui.unit.sp
     text: String, fontSize: Float, query: String,
     selectedMatch: TranscriptSearchMatch?, revealRequest: Int?, onRevealed: (Int) -> Unit,
 ) {
-    val context = LocalContext.current
-    val annotated = remember(text) {
+    val openLink = rememberTranscriptLinkOpener()
+    val annotated = remember(text, openLink) {
         buildAnnotatedString {
             append(text)
-            rawUrlRanges(text).forEach { span ->
+            transcriptLinkRanges(text).forEach { span ->
                 val target = text.substring(span.start, span.endExclusive)
-                addLink(LinkAnnotation.Url(target) { annotation -> openWebLink(context, (annotation as LinkAnnotation.Url).url) }, span.start, span.endExclusive)
+                addLink(LinkAnnotation.Url(target) { annotation -> openLink((annotation as LinkAnnotation.Url).url) }, span.start, span.endExclusive)
             }
         }
     }
@@ -73,12 +73,13 @@ import androidx.compose.ui.unit.sp
  * Links only safe http(s) substrings; the displayed characters stay identical so
  * transcript search anchors and copy text never shift.
  */
-internal fun linkedAnnotated(text: String, context: android.content.Context): AnnotatedString =
+internal fun linkedAnnotated(text: String, context: android.content.Context,
+    openLink: (String) -> Unit = { openWebLink(context, it) }): AnnotatedString =
     buildAnnotatedString {
         append(text)
-        rawUrlRanges(text).forEach { span ->
+        transcriptLinkRanges(text).forEach { span ->
             val target = text.substring(span.start, span.endExclusive)
-            addLink(LinkAnnotation.Url(target) { annotation -> openWebLink(context, (annotation as LinkAnnotation.Url).url) }, span.start, span.endExclusive)
+            addLink(LinkAnnotation.Url(target) { annotation -> openLink((annotation as LinkAnnotation.Url).url) }, span.start, span.endExclusive)
         }
     }
 
@@ -160,7 +161,7 @@ internal fun linkedAnnotated(text: String, context: android.content.Context): An
     selectedMatch: TranscriptSearchMatch?, revealRequest: Int?, onRevealed: (Int) -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val context = LocalContext.current
+    val openLink = rememberTranscriptLinkOpener()
     val spans = remember(block.text) { markdownSpans(block.text) }
     val annotated = buildAnnotatedString {
         spans.forEach { span ->
@@ -171,13 +172,13 @@ internal fun linkedAnnotated(text: String, context: android.content.Context): An
                 "code" -> addStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = colors.surfaceVariant), start, length)
                 "link" -> {
                     addStyle(SpanStyle(color = colors.primary, textDecoration = TextDecoration.Underline), start, length)
-                    addLink(LinkAnnotation.Url(span.url.orEmpty()) { annotation -> openWebLink(context, (annotation as LinkAnnotation.Url).url) }, start, length)
+                    addLink(LinkAnnotation.Url(span.url.orEmpty()) { annotation -> openLink((annotation as LinkAnnotation.Url).url) }, start, length)
                 }
             }
-            if (span.kind == "bold" || span.kind == "code") rawUrlRanges(span.text).forEach { range ->
+            if (span.kind == "bold" || span.kind == "code") transcriptLinkRanges(span.text).forEach { range ->
                 val url = span.text.substring(range.start, range.endExclusive)
                 addStyle(SpanStyle(color = colors.primary, textDecoration = TextDecoration.Underline), start + range.start, start + range.endExclusive)
-                addLink(LinkAnnotation.Url(url) { annotation -> openWebLink(context, (annotation as LinkAnnotation.Url).url) },
+                addLink(LinkAnnotation.Url(url) { annotation -> openLink((annotation as LinkAnnotation.Url).url) },
                     start + range.start, start + range.endExclusive)
             }
         }

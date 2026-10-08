@@ -57,7 +57,7 @@ fun rawUrlRanges(text: String): List<UrlSpan> =
     }.toList()
 
 fun markdownSpans(text: String): List<MarkdownSpan> {
-    val pattern = Regex("`([^`\n]+)`|\\*\\*([^*\n]+)\\*\\*|\\[([^]\\n]+)]\\(([^)\\s]+)\\)")
+    val pattern = Regex("`([^`\n]+)`|\\*\\*([^*\n]+)\\*\\*|\\[([^]\\n]+)]\\((<[^>\\n]+>|[^)\\s]+)\\)")
     val result = mutableListOf<MarkdownSpan>()
     var end = 0
     pattern.findAll(text).forEach { match ->
@@ -65,7 +65,7 @@ fun markdownSpans(text: String): List<MarkdownSpan> {
         result += when {
             match.groupValues[1].isNotEmpty() -> MarkdownSpan(match.groupValues[1], "code")
             match.groupValues[2].isNotEmpty() -> MarkdownSpan(match.groupValues[2], "bold")
-            else -> safeWebLink(match.groupValues[4])?.let { MarkdownSpan(match.groupValues[3], "link", it) } ?: MarkdownSpan(match.value)
+            else -> safeTranscriptLink(match.groupValues[4].removePrefix("<").removeSuffix(">"))?.let { MarkdownSpan(match.groupValues[3], "link", it) } ?: MarkdownSpan(match.value)
         }
         end = match.range.last + 1
     }
@@ -77,9 +77,9 @@ fun markdownSpans(text: String): List<MarkdownSpan> {
 internal fun plainSegmentSpans(value: String): List<MarkdownSpan> {
     val result = mutableListOf<MarkdownSpan>()
     var cursor = 0
-    rawUrlRanges(value).forEach { range ->
+    transcriptLinkRanges(value).forEach { range ->
         if (range.start > cursor) result += MarkdownSpan(value.substring(cursor, range.start))
-        result += MarkdownSpan(value.substring(range.start, range.endExclusive), "link", safeWebLink(value.substring(range.start, range.endExclusive)))
+        result += MarkdownSpan(value.substring(range.start, range.endExclusive), "link", safeTranscriptLink(value.substring(range.start, range.endExclusive)))
         cursor = range.endExclusive
     }
     if (cursor < value.length) result += MarkdownSpan(value.substring(cursor))

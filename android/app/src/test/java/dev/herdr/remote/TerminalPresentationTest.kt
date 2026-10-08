@@ -72,4 +72,48 @@ class TerminalPresentationTest {
     @Test fun emptySnapshotHasNoBlocks() {
         assertEquals(TerminalPresentation(null, emptyList()), terminalPresentation("", "codex"))
     }
+
+    @Test fun claudeRuledInputBoxAndStatusFooterAreCropped() {
+        val captured = requireNotNull(javaClass.getResource("/claude-idle-box.txt")).readText()
+        for (status in listOf("idle", "done", "working")) {
+            val result = conversationTerminalText(captured, "claude", status)
+            assertTrue(result.footerHidden)
+            assertTrue(result.text.endsWith("✻ Worked for 9s · done 11:09 AM"))
+            assertFalse(result.text.contains("commit this"))
+            assertFalse(result.text.contains("auto mode on"))
+        }
+        // The same capture from another agent kind is left alone.
+        assertEquals(ConversationTerminalText(captured, false), conversationTerminalText(captured, "terminal", "done"))
+        val rule = "─".repeat(40)
+        val effort = "Reply.\n\n  ● high · /effort\n$rule\n❯ \n$rule\n  [Sonnet 5.5] 0% ctx\n  ⏵⏵ auto mode on"
+        assertEquals(ConversationTerminalText("Reply.", true), conversationTerminalText(effort, "claude", "done"))
+    }
+
+    @Test fun claudeDialogsAndQuotedBoxesAreNotCropped() {
+        val rule = "─".repeat(40)
+        val dialog = "Bash command\n\n$rule\n❯ 1. Yes\n  2. No\n$rule\n  Esc to cancel"
+        assertEquals(ConversationTerminalText(dialog, false), conversationTerminalText(dialog, "claude", "idle"))
+        val quoted = "Example:\n```text\n$rule\n❯ hi\n$rule\n  status"
+        assertEquals(ConversationTerminalText(quoted, false), conversationTerminalText(quoted, "claude", "done"))
+        val prose = "Done.\n$rule\nThis is a divider, not an input box.\n$rule\n"
+        assertEquals(ConversationTerminalText(prose, false), conversationTerminalText(prose, "claude", "done"))
+    }
+
+    @Test fun readableTextCollapsesRulesAndMapsMissingGlyphs() {
+        val wide = "Title\n${"─".repeat(160)}\n  ⏵⏵ auto mode  ⎿ done  ⏸"
+        assertEquals("Title\n${"─".repeat(24)}\n  ▶▶ auto mode  └ done  ‖", readableTerminalText(wide, collapseRules = true))
+        assertEquals("Title\n${"─".repeat(160)}\n  ▶▶ auto mode  └ done  ‖", readableTerminalText(wide, collapseRules = false))
+        assertEquals("plain ascii", readableTerminalText("plain ascii", collapseRules = true))
+        assertEquals("❯ /model\n  └ Kept", readableTerminalText("❯ /model" + " ".repeat(150) + "\n  ⎿ Kept   ", collapseRules = false))
+        // Short decorative lines inside content are not rules.
+        assertEquals("a ─── b", readableTerminalText("a ─── b", collapseRules = true))
+    }
+
+    @Test fun boxDrawnTablesAreFoundByLine() {
+        val text = "intro\n  ┌───┬───┐\n  │ a │ b │\n  └───┴───┘\nafter │ not a table\n│ lone"
+        val ranges = boxTableRanges(text)
+        assertEquals(1, ranges.size)
+        assertEquals("  ┌───┬───┐\n  │ a │ b │\n  └───┴───┘", text.substring(ranges[0].first, ranges[0].last + 1))
+        assertTrue(boxTableRanges("no boxes here").isEmpty())
+    }
 }

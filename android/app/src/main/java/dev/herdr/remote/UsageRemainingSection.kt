@@ -63,7 +63,7 @@ import java.time.Instant
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("${provider.name} usage", style = MaterialTheme.typography.labelLarge,
+                    Text(if (provider.group == "claude") provider.name + if (provider.active) " · in use" else "" else "${provider.name} usage", style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold)
                     if (measured && status != "Available") {
                         Text(status, style = MaterialTheme.typography.bodySmall,

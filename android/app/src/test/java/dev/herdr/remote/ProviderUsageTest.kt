@@ -60,3 +60,20 @@ class ProviderUsageTest {
         assertNull(usageTimestamp("invalid"))
     }
 }
+
+class ClaudeProviderUsageTest {
+    private val now = java.time.Instant.parse("2026-10-07T12:00:00Z")
+    private fun claude(updated: String) = ProviderUsage("claude:2", "Claude · code", "available",
+        listOf(UsageWindow("five_hour", "5-hour", 80.0, "2026-10-07T16:40:00Z")), updated, group = "claude", account = "code@example.com", active = true)
+
+    @Test fun claudeReadingsStayCurrentForFifteenMinutes() {
+        assertEquals("Available", usageStatus(claude("2026-10-07T11:50:00Z"), offline = false, stale = false, now = now))
+        assertEquals("Last known · updating", usageStatus(claude("2026-10-07T11:40:00Z"), offline = false, stale = false, now = now))
+        assertEquals("Last known · updating", usageStatus(claude("2026-10-07T11:50:00Z").copy(group = null), offline = false, stale = false, now = now))
+    }
+
+    @Test fun unknownGroupFieldsDecodeFromTheBridge() {
+        val decoded = Bridge.json.decodeFromString<ProviderUsage>("""{"id":"claude:1","name":"Claude · a","group":"claude","account":"a@b.c","active":true,"status":"available","windows":[]}""")
+        assertEquals("claude", decoded.group); assertTrue(decoded.active)
+    }
+}

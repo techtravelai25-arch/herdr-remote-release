@@ -14,7 +14,7 @@ import {readJsonBody} from '../src/request-body.js';
 import {generateKeyPair, exportJWK, SignJWT} from 'jose';
 import {Herdr} from '../src/herdr.js';
 
-async function fixture(t,options={}) {
+async function fixture(t,options={},dependencies={}) {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-remote-test-'));const calls=[];
  const p={pane_id:'w1Y:p1',terminal_id:'terminal-1',workspace_id:'w1Y',tab_id:'w1Y:t1',cwd:dir,revision:1,agent_status:'working',agent:'codex',name:'test-agent'};
  let recordCalls=true;
@@ -28,7 +28,7 @@ async function fixture(t,options={}) {
   return {type:'ok'};
  }};
  const config={socketPath:'/unused',stateDir:dir,projects:[{id:'project',label:'Project',path:dir}],...options};
- const app=createBridge(config,{herdr});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+ const app=createBridge(config,{herdr,...dependencies});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
  const url=`http://127.0.0.1:${app.server.address().port}`;const code=app.store.pairCode();const credential=app.store.pair(code,'Test phone');
  const request=async(route,method='GET',body,token=credential.token)=>{
   if(method==='POST'&&token&&/\/(prompt|input|keys|stop)$/.test(route)&&body?.attachmentId===undefined) {
@@ -77,6 +77,22 @@ test('project browsing and file download remain authenticated and bound to the c
  assert.match(downloaded.headers.get('content-disposition'),/filename\*=UTF-8''r%C3%A9sum%C3%A9%20example.py/);
  assert.equal(await downloaded.text(),'print(42)');
  f.p.cwd=path.join(f.dir,'source');assert.equal((await f.request(download)).status,404);
+});
+test('HTML preview routes require device authentication and bind page chunks to the pane',async t=>{
+ const f=await fixture(t);fs.mkdirSync(path.join(f.dir,'pages'));
+ fs.writeFileSync(path.join(f.dir,'pages','index.html'),'<link href="site.css" rel="stylesheet">');
+ fs.writeFileSync(path.join(f.dir,'pages','site.css'),'body{color:red}');
+ const route='/v1/panes/w1Y%3Ap1/preview';
+ assert.equal((await f.request(route+'?target=pages%2Findex.html','GET',undefined,'bad')).status,401);
+ const snapshot=await(await f.request('/v1/snapshot')).json();assert.equal(snapshot.htmlPreviewEnabled,true);
+ const started=await f.request(route+'?target=pages%2Findex.html');assert.equal(started.status,200);
+ const session=await started.json();assert.equal(session.entryPath,'index.html');assert.equal(session.source,'file');
+ const asset=await f.request(route+'/'+session.id+'?path=site.css&offset=0');assert.equal(asset.status,200);
+ assert.equal(Buffer.from((await asset.json()).data,'base64url').toString(),'body{color:red}');
+ assert.equal((await f.request(route+'/'+session.id+'?path=site.css&offset=0','GET',undefined,'bad')).status,401);
+ assert.equal((await f.request(route+'/'+session.id+'?path=..%2F.env&offset=0')).status,400);
+ f.app.store.revoke(f.credential.deviceId);
+ assert.equal((await f.request(route+'/'+session.id+'?path=index.html&offset=0')).status,401);
 });
 test('encoded traversal and hostile filenames cannot turn project downloads into active content',async t=>{
  const f=await fixture(t);
@@ -452,4 +468,26 @@ test('aborted uploads release the upload lock and leave no partial files',async 
  do { await new Promise(resolve=>setTimeout(resolve,10));response=await upload(f); } while(response.status===409&&Date.now()<deadline);
  assert.equal(response.status,201);const entries=f.app.store.read('attachments.json',[]);assert.equal(entries.length,1);
  assert.deepEqual(fs.readdirSync(path.join(f.dir,'.herdr-remote-attachments')),[entries[0].id]);
+});
+test('a corrupt device store closes open sockets without crashing the bridge',async t=>{
+ const f=await fixture(t);const ws=new WebSocket(f.url.replace('http','ws')+'/v1/events',{headers:{Authorization:`Bearer ${f.credential.token}`}});
+ await once(ws,'message');const closed=once(ws,'close');
+ const devices=path.join(f.dir,'devices.json'),saved=fs.readFileSync(devices);
+ fs.writeFileSync(devices,'{corrupt');
+ await Promise.race([closed,new Promise((_,reject)=>setTimeout(()=>reject(Error('socket stayed open')),3000))]);
+ const failed=await f.request('/v1/snapshot');assert.equal(failed.status,500,'an unreadable store is not a revocation');
+ fs.writeFileSync(devices,saved);
+ assert.equal((await f.request('/v1/snapshot')).status,200);
+});
+test('localhost HTML previews require control access while project file previews stay readable',async t=>{
+ const fetched=[];const f=await fixture(t,{},{previewFetch:async url=>{fetched.push(String(url));return new Response('<p>local</p>');}});
+ fs.writeFileSync(path.join(f.dir,'page.html'),'<p>file</p>');
+ const route='/v1/panes/w1Y%3Ap1/preview',local='?target='+encodeURIComponent('http://localhost:5173/');
+ const started=await f.request(route+local);assert.equal(started.status,200);const session=await started.json();
+ assert.equal(session.source,'localhost');assert.equal(fetched.length,1);
+ setDeviceMode(f.app.store,f.credential.deviceId,'observer');
+ const denied=await f.request(route+local);assert.equal(denied.status,403);assert.equal((await denied.json()).error.code,'permission_denied');
+ assert.equal((await f.request(route+'/'+session.id+'?path=other.html&offset=0')).status,403);
+ assert.equal(fetched.length,1,'an observer cannot make the bridge fetch loopback pages');
+ const file=await f.request(route+'?target=page.html');assert.equal(file.status,200);assert.equal((await file.json()).source,'file');
 });

@@ -7,7 +7,7 @@ import {browseProjectFiles, resolveBrowsedFile, validRelative} from './project-f
 
 const MAX_BYTES=20*1024*1024;
 const folders=['artifacts','output','outputs','docs/images'];
-const types={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.pdf':'application/pdf','.txt':'text/plain','.md':'text/plain','.json':'application/json','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.pptx':'application/vnd.openxmlformats-officedocument.presentationml.presentation'};
+const types={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.pdf':'application/pdf','.txt':'text/plain','.md':'text/plain','.json':'application/json','.html':'text/html','.htm':'text/html','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.pptx':'application/vnd.openxmlformats-officedocument.presentationml.presentation'};
 const within=(root,file)=>file.startsWith(root+path.sep);
 function rootFor(config,cwd) {
   let root;try {root=fs.realpathSync(cwd);}catch {throw new BridgeError('project_unavailable','The project directory is unavailable.',409);}

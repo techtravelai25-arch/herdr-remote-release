@@ -49,3 +49,21 @@ test('a pairing code stays consumed across credential publication failures', t =
   assert.equal(recovered.read('devices.json',[]).length,published?1:0);
  }
 });
+
+test('malformed device records never match or throw; a corrupt store is an error, not a revocation', t => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bridge-devices-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const store=new Store(dir),{token,deviceId}=store.pair(store.pairCode(),'Phone');
+  const [valid]=store.read('devices.json');
+  const malformed=[null,'text',{deviceId:'no-hash'},{deviceId:'short',hash:'abc'},{deviceId:'number',hash:7},
+    {deviceId:'upper',hash:valid.hash.toUpperCase()},{deviceId:'long',hash:valid.hash+'00'},{hash:valid.hash}];
+  store.write('devices.json',[...malformed,valid]);
+  assert.equal(store.authenticate(token).deviceId,deviceId);
+  assert.equal(store.authenticate('wrong'),null);
+  store.write('devices.json',malformed);
+  assert.equal(store.authenticate(token),null);
+  store.write('devices.json',{devices:[valid]});
+  assert.throws(()=>store.authenticate(token),/Invalid device store/);
+  fs.writeFileSync(path.join(dir,'devices.json'),'{not json');
+  assert.throws(()=>store.authenticate(token),SyntaxError);
+});

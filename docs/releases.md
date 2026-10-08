@@ -1,6 +1,6 @@
 # Release process
 
-The Android release package is `dev.herdr.remote.community`; development builds add `.debug`. Version 0.8.26 (61) is the first release from this repository. Its dedicated certificate is recorded in `release-signing.json`. Builds signed with another key cannot update it in place.
+The Android release package is `dev.herdr.remote.community`; development builds add `.debug`. Version 0.8.26 (61) was the first release from this repository; later versions keep the same certificate and update it in place. The dedicated certificate is recorded in `release-signing.json`. Builds signed with another key cannot update it in place.
 
 ## Verify a download
 
@@ -28,7 +28,7 @@ Run unit tests, debug/release lint, the APK linkage check, and the relevant emul
 From the repository root, with `ANDROID_HOME` set to the SDK:
 
 ```sh
-python3 scripts/package-release.py --apk android/app/build/outputs/apk/release/app-release.apk --tag v0.8.26 --out artifacts
+python3 scripts/package-release.py --apk android/app/build/outputs/apk/release/app-release.apk --tag v0.8.34 --out artifacts
 ```
 
 The packaging check rejects a different certificate, package ID, debuggable APK, version mismatch, or stale legal notices. Publish `herdr-remote.apk`, `SHA256SUMS`, `app-update.json`, `release-signing.json`, and the three notice files with the matching source tag. Release assets are not committed to Git.

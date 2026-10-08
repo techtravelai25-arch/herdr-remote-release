@@ -10,6 +10,7 @@ import {Store} from './store.js';
 import {Herdr} from './herdr.js';
 import {defaultSessionOwner,assertPortAvailable} from './lifecycle.js';
 import {routingCapabilities} from './routing-capabilities.js';
+import {DEFAULT_PORT,MANAGED_PORT} from './configuration.js';
 export const DEFAULT_PORTAL='';
 export const companionConfigPath=()=>path.join(os.homedir(),'.config/herdr-remote/config.json');
 const writePrivate=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=file+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.chmodSync(tmp,0o600);fs.renameSync(tmp,file);};
@@ -32,15 +33,16 @@ export async function setupCompanion(args,{configPath=companionConfigPath(),fetc
   let portal=process.env.HERDR_REMOTE_PORTAL_ORIGIN||DEFAULT_PORTAL,portalExplicit=false,foreground=false,noPair=false;for(let i=0;i<args.length;i++){if(args[i]==='--portal'){portal=normalizeHttpsOrigin(args[++i]);portalExplicit=true;}else if(args[i]==='--foreground')foreground=true;else if(args[i]==='--no-pair')noPair=true;else throw Error(`Unknown setup option: ${args[i]}`);}
   if(process.platform!=='linux'&&!foreground)throw Error('Automatic startup currently supports Linux. Use setup --foreground on other systems.');
   let config;if(fs.existsSync(configPath))config=JSON.parse(fs.readFileSync(configPath));
-  else config={port:8788,socketPath:await detectSocket({home}),stateDir:path.join(home,'.local/share/herdr-remote'),projects:[{id:'home',label:'Home',path:home}],allowTerminalInput:false,allowHerdrStart:false};
+  else config={port:MANAGED_PORT,socketPath:await detectSocket({home}),stateDir:path.join(home,'.local/share/herdr-remote'),projects:[{id:'home',label:'Home',path:home}],allowTerminalInput:false,allowHerdrStart:false};
   if(process.env.HERDR_SOCKET)config.socketPath=await detectSocket({home,explicit:process.env.HERDR_SOCKET});
   if(!path.isAbsolute(config.socketPath||''))throw Error('The configured Herdr socket must be an absolute path.');
-  config.port??=8787;
+  // A config without a port is served on the CLI default; check that port.
+  config.port??=DEFAULT_PORT;
   config.stateDir=path.resolve(path.dirname(configPath),config.stateDir||'.state');const store=new Store(config.stateDir);
   // Allow the already-running companion to keep its port during an upgrade.
   const active=store.read('bridge-status.json',null);let ownPort=false;
   if(active?.ready&&active.port===config.port&&active.pid)try{process.kill(active.pid,0);ownPort=true;}catch{}
-  if(!ownPort)await checkPort(config.port??8788);
+  if(!ownPort)await checkPort(config.port);
   let identity=store.read('relay-identity.json',null);
   if(!portal)portal=identity?.url;
   if(!portal)throw Error('Relay setup requires --portal HTTPS_ORIGIN. For direct HTTPS pairing, run ops/setup.py and then herdr-remote pair.');
