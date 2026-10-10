@@ -171,7 +171,7 @@ class AppUpdater(application: Application) : AndroidViewModel(application) {
         val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
         val archive = pm.getPackageArchiveInfo(file.absolutePath, flags) ?: throw IOException("The downloaded file is not a valid APK.")
         val current = pm.getPackageInfo(context.packageName, flags)
-        require(archive.packageName == "dev.herdr.remote" && archive.packageName == current.packageName) { "This APK belongs to a different app." }
+        require(archive.packageName == current.packageName) { "This APK belongs to a different app." }
         require(archive.code() == release.versionCode && archive.code() > current.code()) { "The APK version does not match the available update." }
         fun signatures(info: PackageInfo): Set<String> {
             val values = if (Build.VERSION.SDK_INT >= 28) info.signingInfo?.apkContentsSigners else info.signatures

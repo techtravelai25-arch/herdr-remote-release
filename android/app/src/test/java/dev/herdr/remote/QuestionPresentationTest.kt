@@ -64,11 +64,29 @@ class QuestionPresentationTest {
         assertFalse(validQuestionAnswer("answer\u001b[2J"))
     }
 
+    @Test fun claudeMultiAndReviewPreserveNativeSelectionAndSubmissionStages() {
+        val multi = question.copy(stage = "multi", multiSelect = true, selectedOptions = listOf(0, 1), cancelAvailable = true)
+        assertTrue(multi.isValid())
+        assertFalse(multi.copy(multiSelect = false).isValid())
+        assertFalse(multi.copy(selectedOptions = listOf(0, 0)).isValid())
+        assertFalse(multi.copy(selectedOptions = listOf(3)).isValid())
+        assertFalse(multi.copy(stage = "choices").isValid())
+        assertTrue(question.copy(stage = "review", options = listOf("Submit answers"), selectedIndex = 0).isValid())
+        val decoded = Bridge.json.decodeFromString<BridgeQuestion>("""{"id":"${question.id}","prompt":"Which readers?","options":["PDF","Scans","Submit"],"selectedIndex":1,"stage":"multi","multiSelect":true,"selectedOptions":[0,1],"cancelAvailable":true}""")
+        assertTrue(decoded.isValid())
+        assertEquals(listOf(0, 1), decoded.selectedOptions)
+        assertTrue(decoded.cancelAvailable)
+    }
+
     @Test fun panePreflightRejectsChangedControlCapabilitiesAndAttachment() {
         val pane = Pane("p", "w", kind = "codex", status = "working")
         val state = RemoteState(online = true, selectedId = pane.id, terminalAttachmentId = "fresh",
             snapshot = Snapshot(herdrOnline = true, panes = listOf(pane), terminalInputEnabled = true, questionSelectionEnabled = true))
         assertTrue(questionPaneReady(state, pane.id))
+        assertTrue(questionPaneReady(state.copy(snapshot = state.snapshot.copy(
+            panes = listOf(pane.copy(kind = "claude")))), pane.id))
+        assertFalse(questionPaneReady(state.copy(snapshot = state.snapshot.copy(
+            panes = listOf(pane.copy(kind = "opencode")))), pane.id))
         assertFalse(questionPaneReady(state.copy(online = false), pane.id))
         assertFalse(questionPaneReady(state.copy(snapshot = state.snapshot.copy(stale = true)), pane.id))
         assertFalse(questionPaneReady(state.copy(snapshot = state.snapshot.copy(canControl = false)), pane.id))

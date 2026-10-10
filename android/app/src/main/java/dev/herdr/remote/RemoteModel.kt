@@ -717,7 +717,8 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
     /** Submit only the displayed live question; a native dispatch is not agent completion. */
     fun answerQuestion(questionId: String, option: Int?, answerText: String? = null) =
         questionAction("answer", questionId, option, answerText)
-    private fun questionAction(operation: String, questionId: String? = null, option: Int? = null, answerText: String? = null) = action {
+    fun cancelQuestion(questionId: String) = questionAction("answer", questionId, cancel = true)
+    private fun questionAction(operation: String, questionId: String? = null, option: Int? = null, answerText: String? = null, cancel: Boolean = false) = action {
         val paneId = requireNotNull(_state.value.selectedId)
         val navigation = paneSelection.generation
         requireActivePane(paneId)
@@ -725,14 +726,15 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         requireDeliverySettled(paneId)
         val current = _state.value
         require(questionPaneReady(current, paneId)) {
-            "Reconnect to this Codex terminal with control access before reviewing its question."
+            "Reconnect to this agent terminal with control access before reviewing its question."
         }
         val question = current.question
         if (operation == "question-review") {
             require(current.questionReviewAvailable && question == null) { "No queued question is visible. Refresh the terminal." }
         } else {
             require(question != null && question.isValid() && question.id == questionId) { "This question changed. Refresh before answering." }
-            require(if (question.stage == "text") option == null && answerText != null && validQuestionAnswer(answerText)
+            require(if (cancel) question.cancelAvailable && option == null && answerText == null
+                else if (question.stage == "text") option == null && answerText != null && validQuestionAnswer(answerText)
                 else answerText == null && option in question.options.indices) { "Choose a displayed option or enter an answer." }
         }
         val attachmentId = requireTerminalAttachment(paneId)
@@ -741,9 +743,15 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
             questionId?.let { put("questionId", it) }
             option?.let { put("option", it) }
             answerText?.trim()?.let { put("text", it) }
+            if (cancel) put("cancel", true)
         }
         val api = requireBridge(); val generation = connectionGeneration; val receipt = operationId()
-        beginDelivery(paneId, receipt, if (operation == "question-review") "Opening question…" else "Sending choice…", operation = "question.$operation")
+        beginDelivery(paneId, receipt, when {
+            operation == "question-review" -> "Opening question…"
+            cancel -> "Cancelling question…"
+            question?.stage == "text" -> "Sending answer…"
+            else -> "Sending choice…"
+        }, operation = "question.$operation")
         var dispatchStarted = false
         try {
             flushPersistAndWait()

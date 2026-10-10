@@ -109,7 +109,7 @@ class AttentionTracker {
             if (unreadAttentions[pane.id]?.let { it in acknowledgedAttention } == true ||
                 legacyAttentionResumed) read(pane.id)
             val old = previous.put(pane.id, pane)
-            val completion = pane.status in setOf("done", "idle")
+            val completion = pane.status == "done"
             val eventId = pane.completionEventId?.takeIf(String::isNotBlank)
             val attentionEventId = pane.attentionEventId?.takeIf(String::isNotBlank)
             // Event identity also catches completion while polling missed its working state.
@@ -117,7 +117,7 @@ class AttentionTracker {
                 else if (!completion && attentionEventId != null) old?.attentionEventId != attentionEventId
                 else old?.status != pane.status
             if (old != null && changed && pane.kind != "terminal" &&
-                pane.status in setOf("done", "idle", "blocked", "needs_input", "error") &&
+                pane.status in setOf("done", "blocked", "needs_input", "error") &&
                 !(legacyAttentionResumed && completion && eventId == null) &&
                 (if (completion) eventId == null || eventId !in acknowledged else pane.hasUnacknowledgedAttention())) {
                 if (selectedId != pane.id) {

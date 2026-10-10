@@ -27,3 +27,8 @@ This behavior uses Herdr's pane status, not general keyboard/mouse activity on t
 PC. Looking at a different pane does not acknowledge an unrelated reply. A request
 that still needs an answer remains outstanding until it is resolved. This
 behavior requires the Android app and companion 0.8.29 or later.
+
+Local live-monitoring alerts also require an explicit `done` state after observed
+work from the same agent. `working` → `idle` never sends a reply-ready alert or
+creates a new unread marker, including with older bridges without event IDs.
+Acknowledged `done` events are suppressed. This applies to Claude and Codex alike.

@@ -13,13 +13,13 @@ An Android companion for [Herdr](https://github.com/herdrdev/herdr). Read agent 
 
 The setup guide covers the PC requirements and connection steps. The standard APK uses QR pairing; [cloud features](portal/README.md) are optional.
 
-Version **0.8.34 (69)** installs as `dev.herdr.remote.community` and updates community 0.8.26 in place. The matching laptop companion is 0.8.34 (sequence 70). An older community APK with a different signer requires a fresh installation and pairing. See [release verification](docs/releases.md).
+Version **0.8.38 (73)** installs as `dev.herdr.remote.community` and updates community 0.8.34 in place. The matching laptop companion is 0.8.38 (sequence 74). An older community APK with a different signer requires a fresh installation and pairing. See [release verification](docs/releases.md).
 
 ## What works
 
 - Live terminal output plus a clean, read-only Claude, Codex, and OpenCode transcript with earlier-message paging.
 - Prompts and terminal keys, model switching, session management, Git review, and file transfers.
-- Codex question cards with the full question and selectable answers, including questions asked when a session opens. **Other** accepts a custom answer; questions without choices show a typed-answer field. Claude and OpenCode questions use the visible terminal and keys.
+- Claude Code and Codex question cards with the full question and selectable answers. Claude Code supports single choices, multiple selections, custom answers, and review before submission. **Other** accepts a custom answer; questions without choices show a typed-answer field. OpenCode questions use the visible terminal and keys.
 - Project file browsing and private, read-only text previews.
 - Local HTML previews: tap an HTML result link or an HTML file in Files/Results. Nearby styles, images, and scripts load through the paired laptop connection. See [HTML previews](docs/html-previews.md).
 - Claude and Codex usage for each account, and phone notifications that clear when you read the reply on the PC.

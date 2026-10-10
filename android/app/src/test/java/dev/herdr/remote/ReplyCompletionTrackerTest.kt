@@ -16,7 +16,27 @@ class ReplyCompletionTrackerTest {
         assertEquals(listOf("one"), tracker.accept(snapshot(pane("done"))).map { it.id })
         assertTrue(tracker.accept(snapshot(pane("idle"))).isEmpty())
         tracker.accept(snapshot(pane("working")))
-        assertEquals(1, tracker.accept(snapshot(pane("idle"))).size)
+        assertEquals(1, tracker.accept(snapshot(pane("done"))).size)
+    }
+    @Test fun idleAfterObservedClaudeWorkNeverAlertsOrCarriesIntoLaterDone() {
+        for (eventId in listOf<String?>(null, "already-seen")) {
+            val tracker = ReplyCompletionTracker()
+            tracker.accept(snapshot(pane("working", kind = "claude")))
+            val idle = pane("idle", kind = "claude").copy(completionEventId = eventId,
+                completionAcknowledged = eventId != null)
+            assertTrue(tracker.accept(snapshot(idle)).isEmpty())
+            assertTrue(tracker.accept(snapshot(idle.copy(status = "done"))).isEmpty())
+        }
+    }
+    @Test fun acknowledgedDoneDoesNotAlertButNextUnacknowledgedTurnDoes() {
+        val tracker = ReplyCompletionTracker()
+        tracker.accept(snapshot(pane("working", kind = "claude")))
+        val done = pane("done", kind = "claude").copy(completionEventId = "seen")
+        assertTrue(tracker.accept(snapshot(done.copy(completionAcknowledged = true))).isEmpty())
+        tracker.accept(snapshot(pane("working", kind = "claude")))
+        assertTrue(tracker.accept(snapshot(done.copy(acknowledgedCompletionEventIds = listOf("seen")))).isEmpty())
+        tracker.accept(snapshot(pane("working", kind = "claude")))
+        assertEquals(listOf("one"), tracker.accept(snapshot(done.copy(completionEventId = "new"))).map { it.id })
     }
     @Test fun blockedUnknownAndTerminalsAreNotReplies() {
         for (status in listOf("blocked", "needs_input", "unknown")) {

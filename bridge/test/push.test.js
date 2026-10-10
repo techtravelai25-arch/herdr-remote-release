@@ -108,14 +108,14 @@ test('a pane completion is cleared on work resumption and persists its acknowled
   assert.equal(m.annotate({panes:[{id:'w1:p1'}]}).panes[0].completionAcknowledged,true);
 });
 
-test('working to idle records a seen completion without alerting; done to idle clears its exact alert',async t=>{
+for (const agent of ['codex', 'claude']) test(`${agent}: working to idle records a seen completion without alerting; done to idle clears its exact alert`,async t=>{
   const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});const m=s.make();
-  s.observe(m,'working');const seen=s.observe(m,'idle').panes[0];await tick();
+  s.observe(m,'working',{kind:agent});const seen=s.observe(m,'idle',{kind:agent}).panes[0];await tick();
   assert.deepEqual(sent,[]);assert.ok(seen.completionEventId);assert.equal(seen.completionAcknowledged,true);
   assert.deepEqual(seen.acknowledgedCompletionEventIds,[seen.completionEventId]);
-  s.observe(m,'working');s.observe(m,'done');await tick();
+  s.observe(m,'working',{kind:agent});s.observe(m,'done',{kind:agent});await tick();
   assert.deepEqual(sent.map(e=>e.kind),['done']);const second=sent[0].eventId;
-  s.observe(m,'idle');await tick();assert.equal(sent[1].kind,'clear');assert.equal(sent[1].targetEventId,second);
+  s.observe(m,'idle',{kind:agent});await tick();assert.equal(sent[1].kind,'clear');assert.equal(sent[1].targetEventId,second);
 });
 
 test('the first fresh idle snapshot clears a legacy persisted completion after restart',async t=>{

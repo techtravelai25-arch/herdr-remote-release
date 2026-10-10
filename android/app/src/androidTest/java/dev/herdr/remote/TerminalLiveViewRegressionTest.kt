@@ -94,12 +94,14 @@ class TerminalLiveViewRegressionTest {
         onChangeModel: () -> Unit = {},
         onReviewQuestion: () -> Unit = {},
         onAnswerQuestion: (Int?, String?) -> Unit = { _, _ -> },
+        onCancelQuestion: () -> Unit = {},
     ) {
         HerdrTheme {
             TerminalLiveView(
                 state, pane, onDraft, onInsert, onPrompt, onKey, {}, onAttach, onRemoveAttachment,
                 onManageAttachments, onBrowseFiles, onCheckDelivery, onChangeModel,
                 onReviewQuestion = onReviewQuestion, onAnswerQuestion = onAnswerQuestion,
+                onCancelQuestion = onCancelQuestion,
             )
         }
     }
@@ -188,6 +190,111 @@ class TerminalLiveViewRegressionTest {
         compose.onNodeWithText(liveQuestion).assertDoesNotExist()
         compose.onNodeWithText("Only the staging laptop").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Opening question…").assertDoesNotExist()
+    }
+
+    @Test
+    fun claudeQuestionShowsReadableChoicesAndAnswersWithoutTerminalKeys() {
+        val pane = Pane("claude-question", "workspace", kind = "claude", status = "blocked")
+        val question = BridgeQuestion("f".repeat(64), "How should uploaded documents be read?",
+            listOf("Read documents locally\nKeep page images on this machine.",
+                "Add online OCR now\nPage images leave the machine.", "Leave uploads unread"), selectedIndex = 0)
+        val answers = mutableListOf<Pair<Int?, String?>>()
+        val keys = mutableListOf<String>()
+        compose.setContent { TestTerminal(fakeState(pane, question = question)
+            .copy(structuredHistory = savedHistory), pane,
+            onKey = { keys += it }, onAnswerQuestion = { index, text -> answers += index to text }) }
+        compose.onNodeWithText("Conversation · Claude Code").assertExists()
+        compose.onNodeWithText(question.prompt).assertExists()
+        compose.onNodeWithText("Answer in the terminal").assertDoesNotExist()
+        compose.onNodeWithText("Next").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Send prompt").assertIsNotEnabled()
+        compose.onNodeWithText(question.options[1]).performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText(question.options[1]).assertIsNotEnabled()
+        compose.runOnIdle {
+            assertEquals(listOf(1 to null), answers)
+            assertTrue(keys.isEmpty())
+        }
+    }
+
+    @Test
+    fun claudeCustomAnswerUsesQuestionEditorAndFreshControlAccess() {
+        val pane = Pane("claude-text", "workspace", kind = "claude", status = "blocked")
+        val question = BridgeQuestion("f".repeat(64), "How should uploaded documents be read?",
+            emptyList(), freeText = true, stage = "text")
+        var state by mutableStateOf(fakeState(pane, question = question, online = false))
+        val answers = mutableListOf<Pair<Int?, String?>>()
+        compose.setContent { TestTerminal(state, pane,
+            onAnswerQuestion = { index, text -> answers += index to text }) }
+        compose.onNodeWithText("Your answer").assertIsNotEnabled()
+        compose.runOnIdle { state = state.copy(online = true) }
+        compose.onNodeWithText("Your answer").performScrollTo().performTextInput("Read files locally")
+        compose.onNodeWithText("Send answer").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(listOf(null to "Read files locally"), answers) }
+    }
+
+    @Test
+    fun claudeQuestionKeepsNativeTerminalRecoveryReachable() {
+        val pane = Pane("claude-recovery", "workspace", kind = "claude", status = "blocked")
+        val keys = mutableListOf<String>()
+        var state by mutableStateOf(fakeState(pane, output = planMenu, question = choicesQuestion())
+            .copy(structuredHistory = savedHistory))
+        compose.setContent { TestTerminal(state, pane, onKey = { keys += it }) }
+        compose.onNodeWithText("Use terminal controls").performScrollTo().performClick()
+        compose.onNodeWithText("Live terminal question").assertExists()
+        compose.onNodeWithText(planMenu).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Esc").performScrollTo().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(listOf("esc"), keys) }
+        compose.onNodeWithText("Use answer buttons").performScrollTo().performClick()
+        compose.onNodeWithText("Only the staging laptop").assertExists()
+        compose.onNodeWithText("Next").assertDoesNotExist()
+        compose.runOnIdle { state = state.copy(question = null, questionPending = true) }
+        compose.onNodeWithText("Use terminal controls").performScrollTo().performClick()
+        compose.onNodeWithText("Esc").performScrollTo().assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf("esc", "esc"), keys)
+            state = state.copy(busy = true)
+        }
+        compose.onNodeWithText("Esc").assertIsNotEnabled()
+    }
+
+    @Test
+    fun claudeMultipleSelectionsAndReviewRequireSeparateActions() {
+        val pane = Pane("claude-multi", "workspace", kind = "claude", status = "blocked")
+        var question by mutableStateOf(BridgeQuestion("a".repeat(64), "Which readers should be enabled?",
+            listOf("PDF", "Scanned images", "Type something", "Submit"), selectedIndex = 0,
+            stage = "multi", multiSelect = true, selectedOptions = listOf(0), cancelAvailable = true))
+        val answers = mutableListOf<Pair<Int?, String?>>()
+        var cancelled = 0
+        compose.setContent { TestTerminal(fakeState(pane, question = question), pane,
+            onAnswerQuestion = { index, text -> answers += index to text }, onCancelQuestion = { cancelled++ }) }
+        compose.onNodeWithText("✓ PDF").assertExists()
+        compose.onNodeWithText("Scanned images").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf(1 to null), answers)
+            question = question.copy(id = "b".repeat(64), selectedIndex = 1, selectedOptions = listOf(0, 1))
+        }
+        compose.onNodeWithText("✓ Scanned images").assertExists()
+        compose.onNodeWithText("Submit").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf(1 to null, 3 to null), answers)
+            question = BridgeQuestion("c".repeat(64), "Review your answers\nReaders: PDF, Scanned images",
+                listOf("Submit answers"), selectedIndex = 0, stage = "review", cancelAvailable = true)
+        }
+        compose.onNodeWithText("Review and submit answers").assertExists()
+        compose.onNodeWithText("Submit answers").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(listOf(1 to null, 3 to null, 0 to null), answers); assertEquals(0, cancelled) }
+    }
+
+    @Test
+    fun claudeCancelUsesQuestionActionInsteadOfGenericEscape() {
+        val pane = Pane("claude-cancel", "workspace", kind = "claude", status = "blocked")
+        var cancelled = 0
+        val keys = mutableListOf<String>()
+        compose.setContent { TestTerminal(fakeState(pane, question = choicesQuestion().copy(cancelAvailable = true)), pane,
+            onKey = { keys += it }, onCancelQuestion = { cancelled++ }) }
+        compose.onNodeWithText("Cancel question").performScrollTo().performClick()
+        compose.onNodeWithText("Cancel question").assertIsNotEnabled()
+        compose.runOnIdle { assertEquals(1, cancelled); assertTrue(keys.isEmpty()) }
     }
 
     @Test

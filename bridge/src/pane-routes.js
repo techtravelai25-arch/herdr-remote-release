@@ -23,6 +23,15 @@ const inputActions=['prompt','input','keys','stop','restart','rename','focus'];
 export function createPaneRoutes(ctx) {
   const {config,store,herdr,history,attachments,operations,push,htmlPreview,menus,paneAttachments,launcher}=ctx;
   const {pane,locked}=ctx;
+  async function dispatchInput(target,send,guard='always') {
+    const startedAt=Date.now();
+    const cancel=guard==='none'?()=>{}:ctx.inputStarted(target,startedAt,guard==='completed');
+    try {
+      const result=await send();
+      ctx.acceptedInput(target,startedAt);
+      return result;
+    } catch(error) {cancel();throw error;}
+  }
   async function preview(req,res,url,device,match) {
     const paneId=paneParam(match[1]);
     onlyParams(url,match[2]?['path','offset']:['target','artifactId'],'invalid_preview_path','Use one page or resource path.');
@@ -75,15 +84,16 @@ export function createPaneRoutes(ctx) {
   }
   function questionAction(req,device,id,action,b) {
     const operationId=operationInput(req,b);
-    const allowed=action==='question-review'?['operationId','attachmentId']:['operationId','attachmentId','questionId','option','text'];
+    const allowed=action==='question-review'?['operationId','attachmentId']:['operationId','attachmentId','questionId','option','text','cancel'];
     if(Object.keys(b).some(key=>!allowed.includes(key))) reject('invalid_question','Unsupported question action.');
     if(action==='answer'&&(
       typeof b.questionId!=='string'||!/^[a-f0-9]{64}$/.test(b.questionId)||
-      (Number.isInteger(b.option)===('text' in b)) ||
-      ('option' in b && (b.option<0||b.option>32)) ||
-      ('text' in b && (typeof b.text!=='string'||b.text.length<1||b.text.length>500))))
+      ['option','text','cancel'].filter(key=>key in b).length!==1||
+      ('option' in b && (!Number.isInteger(b.option)||b.option<0||b.option>32)) ||
+      ('text' in b && (typeof b.text!=='string'||b.text.length<1||b.text.length>500))||
+      ('cancel' in b && b.cancel!==true)))
       reject('invalid_question','Refresh the question and choose one visible answer.');
-    const input={paneId:id,questionId:b.questionId??null,option:b.option??null,text:b.text??null};
+    const input={paneId:id,questionId:b.questionId??null,option:b.option??null,text:b.text??null,cancel:b.cancel??null};
     return operations.run(device.deviceId,operationId,`pane.${action}`,input,()=>locked(id,async()=>{
       const current=await pane(id);
       paneAttachments.validate(device.deviceId,current,b.attachmentId);
@@ -113,16 +123,14 @@ export function createPaneRoutes(ctx) {
     const target=await pane(id);
     paneAttachments.validate(device.deviceId,target,b.attachmentId);
     if(!target.agent) requireAccess(store,device,'terminal',config);
-    const sent=await herdr.call('pane.send_keys',{pane_id:id,keys:action==='stop'?['ctrl+c']:b.keys});
-    ctx.acceptedInput(target);
-    return sent;
+    return dispatchInput(target,()=>herdr.call('pane.send_keys',{pane_id:id,keys:action==='stop'?['ctrl+c']:b.keys}),
+      action==='keys'&&b.keys.includes('enter')?'completed':'none');
   }
   async function prompt(device,id,current,b,completion,attention) {
     paneAttachments.validate(device.deviceId,current,b.attachmentId);
     if(!current.agent) reject('agent_unavailable','This pane has no detected agent. Use terminal input instead.',409);
     const input=attachments.prompt(b.text??'',b.attachmentIds,current,id,device.deviceId);
-    const submitted=await promptAgent(herdr,id,input,current);
-    ctx.acceptedInput(current);
+    const submitted=await dispatchInput(current,()=>promptAgent(herdr,id,input,current));
     const completionCleared=push.acknowledge?.(id,completion);
     const attentionCleared=push.acknowledgeAttention?.(id,attention);
     const latest=ctx.latest();
@@ -166,9 +174,7 @@ export function createPaneRoutes(ctx) {
       if(!current.agent) requireAccess(store,device,'terminal',config);
       if(typeof b.text!=='string'||!b.text.length||b.text.length>16000||/[\u0000-\u0008\u000b-\u001f\u007f]/.test(b.text))
         reject('invalid_input','Enter up to 16000 characters of terminal text without control characters.');
-      const sent=await herdr.call('pane.send_input',{pane_id:id,text:b.text});
-      ctx.acceptedInput(current);
-      return sent;
+      return dispatchInput(current,()=>herdr.call('pane.send_input',{pane_id:id,text:b.text}),b.text.includes('\n')?'completed':'none');
     }
     return restart(id,current);
   }

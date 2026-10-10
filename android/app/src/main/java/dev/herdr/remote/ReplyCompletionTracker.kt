@@ -11,7 +11,13 @@ class ReplyCompletionTracker {
             if (pane.kind == "terminal") { working.remove(pane.id); return@mapNotNull null }
             when (pane.status) {
                 "working" -> { working[pane.id] = pane.kind; null }
-                "done", "idle" -> if (working.remove(pane.id) == pane.kind) pane else null
+                "done" -> {
+                    val observedWorking = working.remove(pane.id) == pane.kind
+                    val eventId = pane.completionEventId?.takeIf(String::isNotBlank)
+                    if (observedWorking && !pane.completionAcknowledged &&
+                        (eventId == null || eventId !in pane.acknowledgedCompletionEventIds)) pane else null
+                }
+                "idle" -> { working.remove(pane.id); null }
                 else -> { working.remove(pane.id); null }
             }
         }

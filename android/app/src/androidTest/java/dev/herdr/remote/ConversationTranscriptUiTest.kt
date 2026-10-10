@@ -46,7 +46,8 @@ class ConversationTranscriptUiTest {
 
         // A later acknowledgement resets the Compose expiry effect, without renewing the older bubble.
         compose.runOnIdle {
-            sentAt = System.currentTimeMillis() + 1
+            // A future timestamp can make the preview absent on a fast frame.
+            sentAt = System.currentTimeMillis() - 1
             sentPrompts = sentPrompts + "New request"
         }
         compose.mainClock.advanceTimeByFrame()

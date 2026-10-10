@@ -3,6 +3,7 @@ import {BridgeError} from './herdr.js';
 import {readAgentModelMenu,openAgentModelMenu,actAgentModelMenu,keyAgentModelMenu,modelSelectionAgents} from './agent-model.js';
 import {paneIdentity} from './pane-attachment.js';
 import {readCodexQuestionScreen,revealCodexQuestion,actCodexQuestion,questionFingerprint,questionSemantic,questionId} from './codex-question.js';
+import {readClaudeQuestionScreen,actClaudeQuestion,claudeQuestionSemantic} from './claude-question.js';
 
 const reject=(code,message,status=400)=>{ throw new BridgeError(code,message,status); };
 const requestKey=(deviceId,paneId)=>JSON.stringify([deviceId,paneId]);
@@ -10,9 +11,9 @@ const retiredKey=id=>createHash('sha256').update(id).digest('hex');
 const identityHash=pane=>createHash('sha256').update(paneIdentity(pane)).digest('hex');
 const QUESTION_TTL=120000;
 
-/** Per-device Codex question and agent model-picker state for each pane. */
+/** Per-device native question and agent model-picker state for each pane. */
 export function createPaneMenus({herdr,store}) {
-  // Model-menu recognition is scoped to an explicit picker request. Codex
+  // Model-menu recognition is scoped to an explicit picker request. Native
   // question recognition separately reads the current visible screen only;
   // neither passive read sends input.
   const modelMenuRequests=new Map();
@@ -50,13 +51,18 @@ export function createPaneMenus({herdr,store}) {
   async function readQuestion(deviceId,id,current,busy) {
     let question=null,questionReviewAvailable=false,questionAwaitingTransition=false;
     const qKey=requestKey(deviceId,id);
-    if(current.agent==='codex' && busy) questionAwaitingTransition=true;
-    else if(current.agent==='codex') {
+    const supported=current.agent==='codex'||current.agent==='claude';
+    const semantic=value=>current.agent==='claude'
+      ?claudeQuestionSemantic(value,current):questionSemantic(value,current);
+    if(supported && busy) questionAwaitingTransition=true;
+    else if(supported) {
       try {
-        const screen=await readCodexQuestionScreen(herdr,id,current);
+        const screen=current.agent==='claude'
+          ?await readClaudeQuestionScreen(herdr,id,current)
+          :await readCodexQuestionScreen(herdr,id,current);
         const retired=questionRetired.get(retiredKey(id));
         if(retired && (retired.identity!==identityHash(current) || screen.transitioned ||
-            (screen.question && retired.semantic!==questionSemantic(screen.question,current))))
+            (screen.question && retired.semantic!==semantic(screen.question))))
           clearRetiredQuestion(id);
         const previousReveal=questionReveals.get(id);
         const sameReveal=previousReveal?.attempted && previousReveal.identity===paneIdentity(current);
@@ -66,7 +72,7 @@ export function createPaneMenus({herdr,store}) {
         if(previousReveal && (!sameReveal || screen.question || screen.transitioned)) questionReveals.delete(id);
         questionAwaitingTransition=questionRetired.has(retiredKey(id)) ||
           Boolean(sameReveal && !screen.question && !screen.transitioned);
-        questionReviewAvailable=screen.collapsed && !questionAwaitingTransition;
+        questionReviewAvailable=current.agent==='codex'&&screen.collapsed&&!questionAwaitingTransition;
         if(screen.question && !questionAwaitingTransition) {
           const fingerprint=questionFingerprint(screen.question,current);
           let request=questionRequests.get(qKey);
@@ -79,8 +85,16 @@ export function createPaneMenus({herdr,store}) {
             request.expiresAt=Date.now()+QUESTION_TTL;
             const native=screen.question;
             question=native.stage==='text'
-              ?(native.otherDraft===null?{id:request.id,prompt:native.prompt,options:[],selectedIndex:null,freeText:true,stage:'text'}:null)
-              :{id:request.id,prompt:native.prompt,options:native.options,selectedIndex:native.selectedIndex,freeText:false,stage:'choices'};
+              ?(native.otherDraft===null?{id:request.id,prompt:native.prompt,options:[],selectedIndex:null,freeText:true,stage:'text',
+                ...(current.agent==='claude'?{cancelAvailable:true,multiSelect:native.multiSelect}:{} )}:null)
+              :{id:request.id,prompt:native.prompt,
+                options:current.agent==='claude'&&native.multiSelect&&native.otherDraft!==null
+                  ?native.options.map((label,index)=>index===native.typeIndex?`Custom: ${native.otherDraft}`:label)
+                  :native.options,
+                selectedIndex:native.selectedIndex,
+                freeText:false,stage:native.stage,
+                ...(current.agent==='claude'?{cancelAvailable:true,multiSelect:native.multiSelect,
+                  selectedOptions:native.selectedOptions}:{} )};
           }
         } else if(!questionAwaitingTransition) questionRequests.delete(qKey);
       } catch {
@@ -120,8 +134,11 @@ export function createPaneMenus({herdr,store}) {
   }
   /** Reveal or answer the question this device saw. Runs under the pane lock. */
   function questionAction(action,deviceId,id,current,b) {
-    if(current.agent!=='codex') reject('question_unavailable','This pane does not have a supported Codex question.',409);
+    if(current.agent!=='codex'&&current.agent!=='claude')
+      reject('question_unavailable','This pane does not have a supported native question.',409);
     if(action==='question-review') {
+      if(current.agent!=='codex')
+        reject('question_unavailable','This question is already visible in the Claude pane.',409);
       const prior=questionReveals.get(id);
       if(prior?.attempted && prior.identity===paneIdentity(current))
         reject('question_stale','The question reveal was already attempted. Inspect the pane.',409);
@@ -130,10 +147,12 @@ export function createPaneMenus({herdr,store}) {
     const request=questionRequests.get(requestKey(deviceId,id));
     if(!request || request.attempted || request.id!==b.questionId || request.identity!==paneIdentity(current) || request.expiresAt<Date.now())
       reject('question_stale','The question changed. Refresh before answering.',409);
-    return actCodexQuestion(herdr,id,current,request.question,{option:b.option,text:b.text},()=>{
+    const act=current.agent==='claude'?actClaudeQuestion:actCodexQuestion;
+    return act(herdr,id,current,request.question,{option:b.option,text:b.text,cancel:b.cancel},()=>{
       // Another phone may have observed the same frame. Once any key is
       // dispatched, all those authorizations are obsolete.
-      retireQuestion(id,current,questionSemantic(request.question,current));
+      retireQuestion(id,current,current.agent==='claude'
+        ?claudeQuestionSemantic(request.question,current):questionSemantic(request.question,current));
       for(const entry of questionRequests.values())
         if(entry.paneId===id && entry.identity===request.identity) entry.attempted=true;
     });

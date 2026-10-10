@@ -530,6 +530,7 @@ internal fun activityLabel(value: String?): String = value?.let { runCatching { 
                     onChangeModel = model::openAgentModelMenu,
                     onReviewQuestion = model::reviewQuestion,
                     onAnswerQuestion = { option, text -> state.question?.id?.let { model.answerQuestion(it, option, text) } },
+                    onCancelQuestion = { state.question?.id?.let { model.cancelQuestion(it) } },
                     onOpenHistory = { detailTab = 1; if (state.online) model.loadHistory() },
                     onEarlierHistory = { model.loadHistory(true) })
             }

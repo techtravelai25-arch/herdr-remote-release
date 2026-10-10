@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
@@ -16,6 +17,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.dp
     message: String?,
     onReviewQuestion: () -> Unit,
     onAnswerQuestion: (Int?, String?) -> Unit,
+    onCancelQuestion: () -> Unit = {},
 ) {
     val validQuestion = question?.takeIf { it.isValid() }
     if (validQuestion == null && !reviewAvailable && !revealPending) return
@@ -62,8 +65,10 @@ import androidx.compose.ui.unit.dp
                     Text(if (revealPending) "Opening question…" else "Review question")
                 }
             } else {
-                Text("Answer the question", style = MaterialTheme.typography.titleSmall)
+                Text(if (validQuestion.stage == "review") "Review and submit answers" else "Answer the question", style = MaterialTheme.typography.titleSmall)
                 Text(validQuestion.prompt, style = MaterialTheme.typography.bodyMedium)
+                if (validQuestion.stage == "multi") Text("Tap to select or clear an option. Then choose Next or Submit.",
+                    style = MaterialTheme.typography.bodySmall)
                 if (validQuestion.stage == "text") {
                     OutlinedTextField(writtenAnswer, { value ->
                         if (value.length <= 500 && value.none { it.code < 0x20 || it.code in 0x7f..0x9f }) writtenAnswer = value
@@ -76,15 +81,22 @@ import androidx.compose.ui.unit.dp
                         modifier = Modifier.heightIn(min = 48.dp)) { Text("Send answer") }
                 } else validQuestion.options.forEachIndexed { index, label ->
                     val select = { requested = true; onAnswerQuestion(index, null) }
-                    if (index == validQuestion.selectedIndex) FilledTonalButton(onClick = select,
+                    val selected = if (validQuestion.multiSelect) index in validQuestion.selectedOptions else index == validQuestion.selectedIndex
+                    val displayLabel = if (validQuestion.multiSelect && index in validQuestion.selectedOptions) "✓ $label" else label
+                    if (selected) FilledTonalButton(onClick = select,
                         enabled = canAct, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        shape = RoundedCornerShape(12.dp),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
-                        Text(label, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
+                        Text(displayLabel, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
                     } else OutlinedButton(onClick = select,
                         enabled = canAct, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        shape = RoundedCornerShape(12.dp),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
-                        Text(label, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
+                        Text(displayLabel, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
                     }
+                }
+                if (validQuestion.cancelAvailable) TextButton(onClick = { requested = true; onCancelQuestion() }, enabled = canAct) {
+                    Text("Cancel question")
                 }
             }
         }

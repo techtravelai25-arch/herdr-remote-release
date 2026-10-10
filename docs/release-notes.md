@@ -1,4 +1,17 @@
-# Herdr Remote 0.8.34
+# Herdr Remote 0.8.38
+
+Android 0.8.38 (73) and laptop companion 0.8.38 (sequence 74). Update both the app and companion for the question controls. This signed community APK updates 0.8.34 in place with the same certificate.
+
+- Claude Code questions now show structured answer cards for single choices, multiple selections, custom answers, and review. The companion checks the current question, cursor, selections, and typed draft before sending input; stale or ambiguous state is rejected. Terminal controls remain available for recovery.
+- Optional self-hosted app updates validate the installed community package ID while keeping the same signing-key and version checks.
+- Question controls remain reachable in the conversation view, with clearer button labels and spacing.
+- Codex status and completion handling follow the active session. Live monitoring sends a reply-ready alert only after explicit completion, and preserves unsent drafts when a dispatch has not completed.
+
+The release includes an opt-in local Claude Code/Herdr fixture that checks the actual tool result after phone-style HTTP actions. It uses isolated test panes and a local fake model endpoint; it requires installed Claude Code and Herdr and makes no paid model request. See [release checks](releases.md).
+
+Download [herdr-remote.apk](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) and follow [laptop setup](setup.md). Android 8.0+ is required. Physical-device and optional self-hosted cloud acceptance are separate checks.
+
+## Herdr Remote 0.8.34
 
 Android 0.8.34 (69) and laptop companion 0.8.34 (sequence 70). This release updates community 0.8.26 in place with the same signing certificate. Update both the app and the companion (`herdr-remote update` on a managed laptop) for the new controls. It includes all changes listed for 0.8.33 below, which was not published separately from this repository.
 

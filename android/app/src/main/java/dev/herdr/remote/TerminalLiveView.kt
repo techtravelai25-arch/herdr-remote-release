@@ -60,7 +60,8 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
     onEarlierHistory: () -> Unit = {},
     onAcknowledgeDelivery: (String) -> Unit = {},
     onReviewQuestion: () -> Unit = {},
-    onAnswerQuestion: (Int?, String?) -> Unit = { _, _ -> }
+    onAnswerQuestion: (Int?, String?) -> Unit = { _, _ -> },
+    onCancelQuestion: () -> Unit = {},
 ) {
     val paneId = pane?.id ?: state.selectedId
     val draft = paneId?.let { state.drafts[it] }.orEmpty()
@@ -70,20 +71,22 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
     val nativeQuestion = state.question?.takeIf { state.snapshot.questionSelectionEnabled && it.isValid() }
     val hasNativeQuestion = state.snapshot.questionSelectionEnabled &&
         (nativeQuestion != null || state.questionReviewAvailable || state.questionPending)
+    val readingIdentity = listOf(state.url, state.portalDeviceId, paneId, state.terminalAttachmentId)
+    var nativeTerminalControls by remember(readingIdentity) { mutableStateOf(false) }
+    LaunchedEffect(hasNativeQuestion) { if (!hasNativeQuestion) nativeTerminalControls = false }
     val canPaneControl = attached && state.snapshot.terminalInputEnabled && state.snapshot.canControl && !state.busy &&
         !unresolvedDelivery && !state.modelMenuPending && state.agentModelMenu == null &&
         (pane?.kind != "terminal" || state.snapshot.allowTerminalInput)
-    val canQuestionAct = canPaneControl && pane?.kind == "codex" && state.selectedId == pane?.id && !state.questionPending
-    val canInput = canPaneControl && !hasNativeQuestion && !state.questionPending
-    val canPrompt = canInput && pane?.kind != "terminal"
-    val canPickModel = canInput && canChangeAgentModel(state, pane) && !state.modelMenuPending
-    val modelButtonEnabled = canInput && supportsModelSelection(state.snapshot, pane)
+    val canQuestionAct = canPaneControl && pane?.kind in setOf("codex", "claude") && state.selectedId == pane?.id && !state.questionPending
+    val canInput = canPaneControl && ((!hasNativeQuestion && !state.questionPending) || nativeTerminalControls)
+    val canPrompt = canInput && pane?.kind != "terminal" && !hasNativeQuestion
+    val canPickModel = canInput && !hasNativeQuestion && canChangeAgentModel(state, pane) && !state.modelMenuPending
+    val modelButtonEnabled = canInput && !hasNativeQuestion && supportsModelSelection(state.snapshot, pane)
     val needsInput = pane?.status in setOf("blocked", "needs_input", "needs-input") || hasNativeQuestion
     // File selection is local; prompt() checks the fresh pane attachment before uploading.
     val canPickFile = connected && pane != null && pane.kind != "terminal" && !state.modelMenuPending && state.agentModelMenu == null &&
         state.snapshot.canControl && state.snapshot.attachmentsEnabled && !state.busy && !hasNativeQuestion && !state.questionPending
     val attachments = paneId?.let { state.attachments[it] }.orEmpty()
-    val readingIdentity = listOf(state.url, state.portalDeviceId, paneId, state.terminalAttachmentId)
     val vertical = rememberScrollState()
     val horizontal = rememberScrollState()
     val outer = rememberScrollState()
@@ -101,7 +104,7 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
     // terminal-only questions without changing the user's normal reading preference.
     // A queued or opening question has no readable native card yet. Keep its
     // live terminal visible until the bridge supplies the actual question.
-    val terminalQuestion = needsInput && nativeQuestion == null
+    val terminalQuestion = needsInput && (nativeQuestion == null || nativeTerminalControls)
     var reviewConversation by remember(readingIdentity, terminalQuestion) { mutableStateOf(false) }
     val showTerminal = if (terminalQuestion) !reviewConversation else rawTerminal
     val history = state.structuredHistory?.takeIf { pane != null && pane.kind != "terminal" && it.available && it.messages.isNotEmpty() }
@@ -294,10 +297,15 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
             Column(Modifier.fillMaxWidth().onSizeChanged { controlsHeightPx = it.height },
                 verticalArrangement = Arrangement.spacedBy(4.dp)) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            if (hasNativeQuestion) TerminalQuestionCard(nativeQuestion, state.questionReviewAvailable,
+            if (hasNativeQuestion) TextButton(onClick = {
+                nativeTerminalControls = !nativeTerminalControls
+                reviewConversation = false
+                heldOutput = null
+            }) { Text(if (nativeTerminalControls) "Use answer buttons" else "Use terminal controls") }
+            if (hasNativeQuestion && !nativeTerminalControls) TerminalQuestionCard(nativeQuestion, state.questionReviewAvailable,
                 state.questionPending, canQuestionAct, state.terminalAttachmentId,
                 paneId?.let { state.deliveries[it]?.id }, state.message,
-                onReviewQuestion, onAnswerQuestion)
+                onReviewQuestion, onAnswerQuestion, onCancelQuestion)
             else if (needsInput) Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceContainer,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
                 shape = MaterialTheme.shapes.medium) {

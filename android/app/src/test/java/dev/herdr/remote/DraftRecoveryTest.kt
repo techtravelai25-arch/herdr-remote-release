@@ -98,6 +98,30 @@ class DraftRecoveryTest {
         assertTrue(tracker.accept(s(acknowledged), null).isEmpty())
         assertTrue(tracker.accept(s(acknowledged.copy(status = "idle")), null).isEmpty())
     }
+    @Test fun idleClaudePaneNeverCreatesUnreadCompletion() {
+        for (eventId in listOf<String?>(null, "already-seen")) {
+            val tracker = AttentionTracker()
+            val working = Pane("p", "w", kind = "claude", status = "working")
+            fun s(pane: Pane) = Snapshot(herdrOnline = true, panes = listOf(pane))
+            assertTrue(tracker.accept(s(working), null).isEmpty())
+            val idle = working.copy(status = "idle", completionEventId = eventId,
+                completionAcknowledged = eventId != null)
+            assertTrue(tracker.accept(s(idle), null).isEmpty())
+            assertTrue(tracker.accept(s(idle), null).isEmpty())
+        }
+    }
+    @Test fun explicitDoneCreatesUnreadCompletionUnlessAcknowledged() {
+        val working = Pane("p", "w", kind = "claude", status = "working")
+        fun s(pane: Pane) = Snapshot(herdrOnline = true, panes = listOf(pane))
+        val acknowledged = AttentionTracker()
+        acknowledged.accept(s(working), null)
+        assertTrue(acknowledged.accept(s(working.copy(status = "done", completionEventId = "seen",
+            completionAcknowledged = true)), null).isEmpty())
+        val unread = AttentionTracker()
+        unread.accept(s(working), null)
+        assertEquals(setOf("p"), unread.accept(s(working.copy(status = "done",
+            completionEventId = "new")), null))
+    }
     @Test fun delayedAcknowledgementOnlyClearsMatchingUnreadCompletion() {
         val tracker = AttentionTracker()
         val pane = Pane("p", "w", kind = "codex", status = "working")
