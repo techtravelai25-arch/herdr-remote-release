@@ -20,6 +20,12 @@ VERIFY
 "$adb_tool" -s "$serial" get-state | grep -qx device
 "$adb_tool" -s "$serial" install -r "$debug_apk" >/dev/null
 "$adb_tool" -s "$serial" install -r "$test_apk" >/dev/null
+# Tray tests use synthetic alerts and require permission on the fixture app only.
+api_level=$("$adb_tool" -s "$serial" shell getprop ro.build.version.sdk | tr -d '\r')
+[[ "$api_level" =~ ^[0-9]+$ ]] || { echo "Could not read emulator API level" >&2; exit 1; }
+if (( api_level >= 33 )); then
+    "$adb_tool" -s "$serial" shell pm grant dev.herdr.remote.community.debug android.permission.POST_NOTIFICATIONS
+fi
 mkdir -p "$(dirname -- "$log_file")"
 "$adb_tool" -s "$serial" shell am instrument -w -r \
     dev.herdr.remote.community.debug.test/androidx.test.runner.AndroidJUnitRunner > "$log_file"
