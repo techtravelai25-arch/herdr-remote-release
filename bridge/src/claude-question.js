@@ -10,6 +10,37 @@ const pause=()=>new Promise(resolve=>setTimeout(resolve,50));
 const stale=message=>new BridgeError('question_stale',message,409);
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const headerQuestions=value=>value.replace(/[☐☑☒✔✓]/g,'□');
+const trustWarning="Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.";
+const trustAccess="Claude Code'll be able to read, edit, and execute files here.";
+const trustFooter='Enter to confirm · Esc to cancel';
+
+function detectClaudeTrust(text) {
+  // The native startup screen is CR-delimited. Require its complete final
+  // frame and exact warning, so shell scrollback or a partial repaint cannot
+  // grant a question action.
+  const lines=stripVTControlCharacters(text).replace(/\r\n?|\u2028/g,'\n').split('\n');
+  const end=lines.findLastIndex(line=>line.trim());
+  if(end<0||lines[end].trim()!==trustFooter)return null;
+  const borderIndex=lines.findLastIndex((line,index)=>index<end&&
+    /^[─━═]{20,}$/.test(line.trim()));
+  if(borderIndex<0)return null;
+  const content=lines.slice(borderIndex+1,end).map(line=>line.trim()).filter(Boolean);
+  if(content.length<7||content[0]!=='Accessing workspace:')return null;
+  const folder=content[1];
+  if(!folder.startsWith('/')||folder.length>4096||/[\u0000-\u001f\u007f-\u009f…]/.test(folder))return null;
+  const choices=content.slice(-3);
+  if(choices[0]!=='Security guide')return null;
+  const optionRows=choices.slice(1);
+  const options=['No, exit','Yes, I trust this folder'];
+  const selected=optionRows.map((line,index)=>line===`❯ ${options[index]}`?index:-1).filter(index=>index>=0);
+  if(selected.length!==1||optionRows.some((line,index)=>line!==options[index]&&line!==`❯ ${options[index]}`))return null;
+  if(content.slice(2,-3).join(' ')!==`${trustWarning} ${trustAccess}`)return null;
+  return {kind:'claude_trust',workspacePath:folder,
+    prompt:`Accessing workspace:\n${folder}\n\n${trustWarning}\n\n${trustAccess}\n\nSecurity guide`,
+    options,selectedIndex:selected[0],stage:'choices',otherDraft:null,selectedOptions:[],
+    multiSelect:false,typeIndex:null,chatIndex:null,submitIndex:null,
+    contextHeader:`Accessing workspace: ${folder}`};
+}
 
 // Claude renders the unfocused empty inline field in gray (SGR 246), and
 // places the inverse-video caret on its first character when focused. That
@@ -56,6 +87,8 @@ function emptyInlineField(rawLines,index,focused,label) {
 /** A complete, current Claude Code AskUserQuestion choice menu. */
 export function detectClaudeQuestion(text) {
   if(typeof text!=='string'||text.length>24000)return null;
+  const trust=detectClaudeTrust(text);
+  if(trust)return trust;
   const ansiLines=text.split('\n');
   const rawLines=stripVTControlCharacters(text).split('\n').map(line=>line.replace(/\u2800/g,' '));
   const lines=rawLines.map(line=>line
@@ -192,6 +225,7 @@ function detectClaudeReview(lines) {
 }
 
 export const claudeQuestionSemantic=(question,pane)=>hash({pane:paneIdentity(pane),
+  kind:question.kind,workspacePath:question.workspacePath,
   prompt:question.prompt,options:question.options,stage:question.stage,
   selectedOptions:question.selectedOptions,otherDraft:question.otherDraft,
   contextHeader:question.contextHeader});
@@ -204,7 +238,9 @@ export async function readClaudeQuestionScreen(herdr,id,first) {
   const after=(await herdr.call('pane.get',{pane_id:id})).pane;
   if(paneIdentity(after)!==paneIdentity(first))
     throw stale('The Claude pane changed while it was read. Refresh it.');
-  const question=read.truncated?null:detectClaudeQuestion(read.text);
+  let question=read.truncated?null:detectClaudeQuestion(read.text);
+  if(question?.kind==='claude_trust'&&[first,before,after].some(pane=>
+    (pane.foreground_cwd??pane.cwd)!==question.workspacePath))question=null;
   const visible=typeof read.text==='string'?stripVTControlCharacters(read.text):'';
   const visibleLines=visible.split('\n');
   const composerIndex=visibleLines.findLastIndex(line=>/^\s*❯\s*(?:Try \".*\")?\s*$/.test(line));
@@ -226,7 +262,8 @@ export async function actClaudeQuestion(herdr,id,first,expected,{option,text,can
     try{screen=await readClaudeQuestionScreen(herdr,id,first);}
     catch(error){if(wrote)error.paneId=id;throw error;}
     const current=screen.question;
-    if(!current||current.prompt!==expected.prompt||current.multiSelect!==expected.multiSelect||
+    if(!current||current.kind!==expected.kind||current.workspacePath!==expected.workspacePath||
+       current.prompt!==expected.prompt||current.multiSelect!==expected.multiSelect||
        (allowHeaderStatusChange
          ?headerQuestions(current.contextHeader)!==headerQuestions(expected.contextHeader)
          :current.contextHeader!==expected.contextHeader)||
@@ -247,6 +284,8 @@ export async function actClaudeQuestion(herdr,id,first,expected,{option,text,can
     catch(error){error.paneId=id;throw error;}
   };
   const key=key=>send('pane.send_keys',{keys:[key]});
+  if(current.kind==='claude_trust'&&(cancel===true||text!==undefined))
+    throw new BridgeError('invalid_question_option','Choose the visible Exit or Trust option.',400);
   if(cancel===true){await key('esc');return {dispatched:true};}
   if(current.stage==='text') {
     if(current.otherDraft!==null||typeof text!=='string'||text.length<1||text.length>500||

@@ -1,4 +1,14 @@
-# Herdr Remote 0.8.38
+# Herdr Remote 0.8.39
+
+Android 0.8.39 (74) and laptop companion 0.8.39 (sequence 75). This signed community APK updates 0.8.38 in place with the same certificate. Update both the app and companion for the new trust control.
+
+- When Claude Code starts in a new folder, the app shows its full workspace path and safety warning in a native card. **No, exit** and **Yes, I trust this folder** are the two explicit choices. Trust is sent only after tapping that choice.
+- The companion accepts a trust action only while the complete startup screen still belongs to the selected folder and pane. A partial, changed, or ambiguous screen stays in the terminal fallback.
+- The local Claude Code/Herdr fixture also covers choosing Exit on the startup trust screen.
+
+Download [herdr-remote.apk](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) and follow [laptop setup](setup.md). Android 8.0+ is required. Physical-device and optional self-hosted cloud acceptance are separate checks.
+
+## Herdr Remote 0.8.38
 
 Android 0.8.38 (73) and laptop companion 0.8.38 (sequence 74). Update both the app and companion for the question controls. This signed community APK updates 0.8.34 in place with the same certificate.
 

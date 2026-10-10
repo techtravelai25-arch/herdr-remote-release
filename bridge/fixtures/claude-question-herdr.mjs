@@ -2,7 +2,7 @@
 // Requires HERDR_ENV=1 and installed herdr/claude. CLAUDE_BIN may select a
 // cached Claude binary. HERDR_QUESTION_TRACE_PATH saves sanitized test evidence.
 // This owns a named Herdr server, workspace, local fake API and bridge.
-// Add --multi to exercise checkbox clear/recheck and explicit review submission.
+// Add --multi for checkbox/review coverage, or --trust-exit to reject trust.
 import assert from 'node:assert/strict';
 import {spawn, spawnSync} from 'node:child_process';
 import {createServer} from 'node:http';
@@ -16,8 +16,12 @@ import {detectClaudeQuestion} from '../src/claude-question.js';
 
 // Reject outside Herdr before any control command, including cleanup.
 assert.equal(process.env.HERDR_ENV,'1','Run this fixture from a Herdr-managed pane.');
-assert.ok(process.argv.slice(2).every(arg=>arg==='--multi'),'Only --multi is supported.');
+assert.ok(process.argv.slice(2).every(arg=>['--multi','--trust-exit'].includes(arg)),
+  'Only --multi and --trust-exit are supported.');
+assert.ok(!(process.argv.includes('--multi')&&process.argv.includes('--trust-exit')),
+  'Choose one fixture mode.');
 const multiSelect=process.argv.includes('--multi');
+const trustExit=process.argv.includes('--trust-exit');
 const foundClaude=spawnSync('which',['claude'],{encoding:'utf8',timeout:5000});
 const claudeBin=process.env.CLAUDE_BIN
   ?path.resolve(process.env.CLAUDE_BIN):foundClaude.stdout.trim();
@@ -30,6 +34,8 @@ let serverOutput='';
 const transportTrace=[];
 const answers=[];
 const apiRequests=[];
+const apiCalls=[];
+const trustEvidence={};
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const shellQuote=value=>`'${String(value).replaceAll("'","'\"'\"'")}'`;
 const tracePath=process.env.HERDR_QUESTION_TRACE_PATH;
@@ -37,8 +43,8 @@ const saveTrace=(status,error)=>{
   if(!tracePath)return;
   const target=path.resolve(tracePath);
   fs.mkdirSync(path.dirname(target),{recursive:true});
-  fs.writeFileSync(target,JSON.stringify({status,error,trace:transportTrace,
-    apiRequests,toolResultObserved:answers.some(answer=>typeof answer==='string'&&
+  fs.writeFileSync(target,JSON.stringify({status,error,mode:trustExit?'trust-exit':multiSelect?'multi':'single',
+    trust:trustEvidence,trace:transportTrace,apiCalls,apiRequests,toolResultObserved:answers.some(answer=>typeof answer==='string'&&
       answer.startsWith('The user answered: "How should the local fixture proceed?"="Use local previews".'))},null,2));
   console.log('TRACE_FILE:',target);
 };
@@ -69,6 +75,7 @@ const readBody=async req=>{let body='';for await(const chunk of req)body+=chunk;
 let emitted=false;
 api=createServer(async(req,res)=>{
   try {
+    apiCalls.push(req.url);
     const body=await readBody(req);
     if(req.url?.startsWith('/v1/messages/count_tokens')){
       res.writeHead(200,{'Content-Type':'application/json'});res.end('{"input_tokens":100}');return;
@@ -127,13 +134,11 @@ exec /usr/bin/env -i \
   NO_PROXY=127.0.0.1,localhost \
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
   DISABLE_TELEMETRY=1 \
-  CLAUDE_CODE_SANDBOXED=1 \
   ${shellQuote(fixtureClaude)} --model claude-sonnet-4-5
 `,{mode:0o700});
   const created=cli('workspace','create','--cwd',root,'--label','question-fixture','--no-focus');
   const paneId=created.root_pane.pane_id;
   ownPaneId=paneId;
-  cli('pane','run',paneId,launcher);
   const {Herdr}=await import('../src/herdr.js');
   const herdr=new Herdr(socketPath);
   ownHerdr=herdr;
@@ -141,29 +146,6 @@ exec /usr/bin/env -i \
     const result=await herdr.call('pane.read',{pane_id:paneId,source:'visible',
       format:'text',lines:120});return result.read.text;
   };
-  let prompted=false,theme=false,key=false,security=false;
-  let output='';
-  while(Date.now()<timeout){
-    output=await read();
-    if(output.includes('Unable to connect to Anthropic services'))
-      throw Error('Claude ignored the local fake API during startup.');
-    if(!theme&&/Choose.*text.*style/is.test(output)){cli('pane','send-keys',paneId,'enter');theme=true;}
-    else if(!key&&output.includes('Detected a custom API key')){
-      cli('pane','send-keys',paneId,'up');cli('pane','send-keys',paneId,'enter');key=true;
-    } else if(key&&!security&&output.includes('Security notes:')){
-      cli('pane','send-keys',paneId,'enter');security=true;
-    } else if(key&&!prompted&&/❯\s*$/m.test(output)&&output.includes('? for shortcuts')){
-      cli('pane','send-text',paneId,'Run the local question fixture.');
-      cli('pane','send-keys',paneId,'enter');prompted=true;
-    }
-    if(prompted&&output.includes('How should the local fixture proceed?'))break;
-    if(prompted&&apiRequests.length>=2&&!apiRequests.some(request=>
-      request.tools.includes('AskUserQuestion')))
-      throw Error('Native Claude did not advertise AskUserQuestion to the local fake API.');
-    await sleep(100);
-  }
-  assert.ok(prompted,'Claude did not reach the owned fixture prompt.');
-  assert.match(output,/How should the local fixture proceed\?/);
   const tracedHerdr={call:async(method,params,ms)=>{
     const result=await herdr.call(method,params,ms);
     if(method==='pane.read')transportTrace.push({method,source:params.source,
@@ -180,74 +162,145 @@ exec /usr/bin/env -i \
   bridge.server.listen(0,'127.0.0.1');await once(bridge.server,'listening');
   const device=bridge.store.pair(bridge.store.pairCode(),'fixture-phone');
   const route=`http://127.0.0.1:${bridge.server.address().port}/v1/panes/${encodeURIComponent(paneId)}`;
-  const request=async(suffix,method='GET',body)=>{
+  const request=async(suffix,method='GET',body,{allowPaneChange=false}={})=>{
     const response=await fetch(route+suffix,{method,headers:{Authorization:`Bearer ${device.token}`,
       'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});
     const data=await response.json();
+    if(allowPaneChange&&suffix==='/output'&&response.status===409&&data.error?.code==='pane_changed')
+      return null;
     assert.equal(response.status,200,`${suffix}: ${JSON.stringify(data)}`);return data;
   };
   const waitCard=async(stage,predicate=()=>true)=>{
     const deadline=Date.now()+12000;
     while(Date.now()<deadline){
-      const result=await request('/output');
-      if(result.question?.stage===stage&&predicate(result.question))return result;
+      const result=await request('/output','GET',undefined,{allowPaneChange:true});
+      if(result?.question?.stage===stage&&predicate(result.question))return result;
       await sleep(100);
     }
     throw Error(`The bridge did not expose the expected ${stage} question state.`);
   };
   const answer=(card,operationId,input)=>request('/answer','POST',{
     operationId,attachmentId:card.attachmentId,questionId:card.question.id,...input});
-  let card;
-  const cardDeadline=Date.now()+12000;
-  while(Date.now()<cardDeadline){
-    const result=await request('/output');
-    if(result.question?.stage===(multiSelect?'multi':'choices')){card=result;break;}
-    await sleep(500);
+  cli('pane','run',paneId,launcher);
+  const trustCard=await waitCard('choices',value=>value.kind==='claude_trust');
+  const expectedTrust=`Accessing workspace:\n${root}\n\n`+
+    "Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.\n\n"+
+    "Claude Code'll be able to read, edit, and execute files here.\n\nSecurity guide";
+  assert.equal(trustCard.question.prompt,expectedTrust);
+  assert.deepEqual(trustCard.question.options,['No, exit','Yes, I trust this folder']);
+  assert.equal(trustCard.question.selectedIndex,0,'Native trust must default to Exit.');
+  assert.equal(trustCard.question.cancelAvailable,false);
+  assert.deepEqual(apiCalls,[],'The fake model API must not be called before explicit trust.');
+  Object.assign(trustEvidence,{path:root,selectedIndex:trustCard.question.selectedIndex,
+    options:trustCard.question.options,apiCallsBeforeDecision:apiCalls.length,
+    chosenOption:trustExit?0:1});
+  const trustResult=await answer(trustCard,'herdr-fixture-trust-choice',
+    {option:trustExit?0:1});
+  assert.equal(trustResult.dispatched,true);
+  console.log('TRUST_CHOICE:',trustExit?'No, exit':'Yes, I trust this folder');
+  if(trustExit){
+    let shell=false;
+    while(Date.now()<timeout){
+      const pane=(await herdr.call('pane.get',{pane_id:paneId})).pane;
+      const visible=await read();
+      const last=visible.replace(/\r/g,'\n').trimEnd().split('\n').at(-1)??'';
+      if(!pane.agent&&/\$\s*$/.test(last)){shell=true;break;}
+      await sleep(100);
+    }
+    assert.ok(shell,'Exit did not return the owned pane to its shell.');
+    trustEvidence.returnedToShell=true;
+    assert.deepEqual(apiCalls,[],'Declining trust must not call the fake model API.');
+    cli('pane','run',paneId,launcher);
+    let trustAgain=false;
+    while(Date.now()<timeout){
+      const {read:frame}=await herdr.call('pane.read',{pane_id:paneId,source:'visible',
+        format:'ansi',strip_ansi:false,lines:120});
+      const current=detectClaudeQuestion(frame.text);
+      if(current?.kind==='claude_trust'&&current.workspacePath===root){trustAgain=true;break;}
+      await sleep(100);
+    }
+    assert.ok(trustAgain,'The folder trust prompt did not reappear after Exit.');
+    trustEvidence.promptReappeared=true;
+    assert.deepEqual(apiCalls,[],'The second untrusted launch must not call the fake model API.');
+    console.log('PASS: authenticated bridge Exit -> native shell; second launch still requires folder trust; zero fake API calls');
+    saveTrace('pass');
+  } else {
+    let prompted=false,theme=false,key=false,security=false;
+    let output='';
+    while(Date.now()<timeout){
+      output=await read();
+      if(output.includes('Unable to connect to Anthropic services'))
+        throw Error('Claude ignored the local fake API during startup.');
+      if(!theme&&/Choose.*text.*style/is.test(output)){cli('pane','send-keys',paneId,'enter');theme=true;}
+      else if(!key&&output.includes('Detected a custom API key')){
+        cli('pane','send-keys',paneId,'up');cli('pane','send-keys',paneId,'enter');key=true;
+      } else if(key&&!security&&output.includes('Security notes:')){
+        cli('pane','send-keys',paneId,'enter');security=true;
+      } else if(key&&!prompted&&/❯\s*$/m.test(output)&&output.includes('? for shortcuts')){
+        trustEvidence.composerObserved=true;
+        cli('pane','send-text',paneId,'Run the local question fixture.');
+        cli('pane','send-keys',paneId,'enter');prompted=true;
+      }
+      if(prompted&&output.includes('How should the local fixture proceed?'))break;
+      if(prompted&&apiRequests.length>=2&&!apiRequests.some(request=>
+        request.tools.includes('AskUserQuestion')))
+        throw Error('Native Claude did not advertise AskUserQuestion to the local fake API.');
+      await sleep(100);
+    }
+    assert.ok(prompted,'Claude did not reach the owned fixture prompt.');
+    assert.match(output,/How should the local fixture proceed\?/);
+    let card;
+    const cardDeadline=Date.now()+12000;
+    while(Date.now()<cardDeadline){
+      const result=await request('/output','GET',undefined,{allowPaneChange:true});
+      if(result?.question?.stage===(multiSelect?'multi':'choices')){card=result;break;}
+      await sleep(500);
+    }
+    assert.ok(card?.question,'The authenticated bridge route did not detect the native question.');
+    assert.equal(card.question.prompt,question.questions[0].question);
+    assert.deepEqual(card.question.options.slice(0,2),[
+      'Keep local Use local fixture data.','Use sample Use synthetic sample data.']);
+    const first=await request('/answer','POST',{operationId:'herdr-fixture-open-custom',
+      attachmentId:card.attachmentId,questionId:card.question.id,option:2});
+    assert.equal(first.stage,'text');
+    assert.equal(first.opened,true);
+    let textCard;
+    const textDeadline=Date.now()+12000;
+    while(Date.now()<textDeadline){
+      const result=await request('/output','GET',undefined,{allowPaneChange:true});
+      if(result?.question?.stage==='text'){textCard=result;break;}
+      await sleep(500);
+    }
+    assert.ok(textCard?.question,'The bridge did not expose the native custom editor.');
+    const typed=await request('/answer','POST',{operationId:'herdr-fixture-custom-answer',
+      attachmentId:textCard.attachmentId,questionId:textCard.question.id,
+      text:'Use local previews'});
+    if(multiSelect){
+      assert.equal(typed.selected,true);
+      const drafted=value=>value.options[2]==='Custom: Use local previews';
+      const checked=value=>drafted(value)&&JSON.stringify(value.selectedOptions)==='[2]';
+      card=await waitCard('multi',checked);
+      const cleared=await answer(card,'herdr-fixture-clear-custom',{option:2});
+      assert.equal(cleared.selected,false);
+      card=await waitCard('multi',value=>drafted(value)&&value.selectedOptions.length===0);
+      const rechecked=await answer(card,'herdr-fixture-recheck-custom',{option:2});
+      assert.equal(rechecked.selected,true);
+      card=await waitCard('multi',checked);
+      const submitted=await answer(card,'herdr-fixture-open-review',{option:3});
+      assert.equal(submitted.dispatched,true);
+      card=await waitCard('review');
+      const reviewed=await answer(card,'herdr-fixture-submit-review',{option:0});
+      assert.equal(reviewed.dispatched,true);
+    }else assert.equal(typed.dispatched,true);
+    while(Date.now()<timeout&&!answers.length)await sleep(100);
+    assert.ok(answers.some(answer=>typeof answer==='string'&&answer.startsWith(
+      'The user answered: "How should the local fixture proceed?"="Use local previews".')),
+      'Claude did not send the exact custom answer as a tool_result.');
+    console.log('PASS: authenticated bridge output and answer -> real Herdr socket and pane -> native Claude -> fake API tool_result');
+    console.log('TOOL_RESULT: "How should the local fixture proceed?"="Use local previews"');
+    console.log('QUESTION_MODE:',multiSelect?'multi with checkbox clear/recheck and review':'single');
+    saveTrace('pass');
   }
-  assert.ok(card?.question,'The authenticated bridge route did not detect the native question.');
-  assert.equal(card.question.prompt,question.questions[0].question);
-  assert.deepEqual(card.question.options.slice(0,2),[
-    'Keep local Use local fixture data.','Use sample Use synthetic sample data.']);
-  const first=await request('/answer','POST',{operationId:'herdr-fixture-open-custom',
-    attachmentId:card.attachmentId,questionId:card.question.id,option:2});
-  assert.equal(first.stage,'text');
-  assert.equal(first.opened,true);
-  let textCard;
-  const textDeadline=Date.now()+12000;
-  while(Date.now()<textDeadline){
-    const result=await request('/output');
-    if(result.question?.stage==='text'){textCard=result;break;}
-    await sleep(500);
-  }
-  assert.ok(textCard?.question,'The bridge did not expose the native custom editor.');
-  const typed=await request('/answer','POST',{operationId:'herdr-fixture-custom-answer',
-    attachmentId:textCard.attachmentId,questionId:textCard.question.id,
-    text:'Use local previews'});
-  if(multiSelect){
-    assert.equal(typed.selected,true);
-    const drafted=value=>value.options[2]==='Custom: Use local previews';
-    const checked=value=>drafted(value)&&JSON.stringify(value.selectedOptions)==='[2]';
-    card=await waitCard('multi',checked);
-    const cleared=await answer(card,'herdr-fixture-clear-custom',{option:2});
-    assert.equal(cleared.selected,false);
-    card=await waitCard('multi',value=>drafted(value)&&value.selectedOptions.length===0);
-    const rechecked=await answer(card,'herdr-fixture-recheck-custom',{option:2});
-    assert.equal(rechecked.selected,true);
-    card=await waitCard('multi',checked);
-    const submitted=await answer(card,'herdr-fixture-open-review',{option:3});
-    assert.equal(submitted.dispatched,true);
-    card=await waitCard('review');
-    const reviewed=await answer(card,'herdr-fixture-submit-review',{option:0});
-    assert.equal(reviewed.dispatched,true);
-  }else assert.equal(typed.dispatched,true);
-  while(Date.now()<timeout&&!answers.length)await sleep(100);
-  assert.ok(answers.some(answer=>typeof answer==='string'&&answer.startsWith(
-    'The user answered: "How should the local fixture proceed?"="Use local previews".')),
-    'Claude did not send the exact custom answer as a tool_result.');
-  console.log('PASS: authenticated bridge output and answer -> real Herdr socket and pane -> native Claude -> fake API tool_result');
-  console.log('TOOL_RESULT: "How should the local fixture proceed?"="Use local previews"');
-  console.log('QUESTION_MODE:',multiSelect?'multi with checkbox clear/recheck and review':'single');
-  saveTrace('pass');
 } catch(error) {
   console.error('FIXTURE_FAILURE:',error.message);
   if(ownHerdr&&ownPaneId)try {

@@ -217,6 +217,44 @@ class TerminalLiveViewRegressionTest {
     }
 
     @Test
+    fun claudeFolderTrustShowsTheFullNativeWarningBeforeConversationAndSendsOnlyTappedChoice() {
+        val pane = Pane("claude-trust", "workspace", kind = "claude", status = "unknown")
+        val prompt = """Accessing workspace:
+/tmp/example-claude-project
+
+Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source
+project, or work from your team). If not, take a moment to review what's in this folder first.
+
+Claude Code'll be able to read, edit, and execute files here.
+
+Security guide"""
+        var question by mutableStateOf(BridgeQuestion("f".repeat(64), prompt,
+            listOf("No, exit", "Yes, I trust this folder"), selectedIndex = 0, kind = "claude_trust"))
+        val answers = mutableListOf<Pair<Int?, String?>>()
+        val keys = mutableListOf<String>()
+        compose.setContent { TestTerminal(fakeState(pane, question = question).copy(historyLoading = true), pane,
+            onKey = { keys += it }, onAnswerQuestion = { index, text -> answers += index to text }) }
+        compose.onNodeWithText("Claude Code folder trust").assertExists()
+        compose.onNodeWithText(prompt).assertExists()
+        compose.onNodeWithText("No, exit").assertExists()
+        compose.onNodeWithText("Yes, I trust this folder").assertExists()
+        compose.onNodeWithText("Loading conversation…").assertDoesNotExist()
+        compose.onNodeWithText("Use terminal controls").assertDoesNotExist()
+        compose.onNodeWithText("Answer in the terminal").assertDoesNotExist()
+        compose.onNodeWithText("Your answer").assertDoesNotExist()
+        compose.onNodeWithText("Cancel question").assertDoesNotExist()
+        compose.runOnIdle { assertTrue(answers.isEmpty()); assertTrue(keys.isEmpty()) }
+        compose.onNodeWithText("Yes, I trust this folder").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf(1 to null), answers)
+            assertTrue(keys.isEmpty())
+            question = question.copy(id = "e".repeat(64), selectedIndex = 1)
+        }
+        compose.onNodeWithText("No, exit").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(listOf(1 to null, 0 to null), answers); assertTrue(keys.isEmpty()) }
+    }
+
+    @Test
     fun claudeCustomAnswerUsesQuestionEditorAndFreshControlAccess() {
         val pane = Pane("claude-text", "workspace", kind = "claude", status = "blocked")
         val question = BridgeQuestion("f".repeat(64), "How should uploaded documents be read?",

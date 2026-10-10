@@ -87,14 +87,29 @@ How should the local fixture proceed?
 
 Enter to select · ↑/↓ to navigate · Esc to cancel`;
 
+// Sanitized from the Claude Code 2.1.296 first-run workspace trust screen.
+// The visible pane.read ANSI frame uses carriage returns without line feeds.
+const trustMenu=(folder,selected=0)=>[
+  '\u001b[38;5;220m────────────────────────────────────────────────────────────────────────\u001b[0m',
+  ' Accessing workspace:', '', ` ${folder}`, '',
+  ' Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source',
+  " project, or work from your team). If not, take a moment to review what's in this folder first.",
+  '', " Claude Code'll be able to read, edit, and execute files here.",
+  '', ' Security guide', '',
+  ` ${selected===0?'❯':' '} No, exit`,
+  ` ${selected===1?'❯':' '} Yes, I trust this folder`,
+  '', ' Enter to confirm · Esc to cancel',
+].join('\r');
+
 async function fixture(t,{onWrite,mode='single'}={}) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'claude-question-http-'));
   const pane={pane_id:'w1:p1',workspace_id:'w1',tab_id:'t1',cwd:dir,agent:'claude',
-    agent_status:'blocked',terminal_id:'term',agent_session:{value:'test-session'}};
-  const state={selected:0,prompt:'How should uploads be read?',kind:'menu',mode,
+    agent_status:mode==='trust'?'unknown':'blocked',terminal_id:'term',
+    agent_session:mode==='trust'?null:{value:'test-session'}};
+  const state={selected:0,prompt:'How should uploads be read?',kind:mode==='trust'?'trust':'menu',mode,
     draft:'',checked:[],truncated:false,override:null,homeCaret:false};
   const calls=[];
-  const screen=()=>state.override??(state.kind==='review'?review():state.kind==='menu'
+  const screen=()=>state.override??(state.kind==='trust'?trustMenu(dir,state.selected):state.kind==='review'?review():state.kind==='menu'
     ?(state.mode==='multi'?multiMenu(state.selected,state.checked,state.draft)
       :state.homeCaret&&state.draft==='Type something.'
         ?menu(state.selected,state.prompt,state.draft).replace('5. Type something.',
@@ -115,7 +130,7 @@ async function fixture(t,{onWrite,mode='single'}={}) {
       }
       if(params.keys[0]==='esc')state.kind='done';
       if(params.keys[0]==='enter') {
-        if(state.kind==='review')state.kind='done';
+        if(state.kind==='trust'||state.kind==='review')state.kind='done';
         else if(state.mode==='multi') {
           if(state.selected===5)state.kind='review';
           else if(state.selected<4)state.checked=state.checked.includes(state.selected)
@@ -432,4 +447,82 @@ test('old composer above a partial Claude menu does not clear retirement',async 
   assert.equal((await f.attach()).questionAwaitingTransition,true);
   f.state.override=menu();
   assert.equal((await f.attach()).questionAwaitingTransition,true);
+});
+
+test('Claude startup trust is a full native choice card and only an explicit Trust dispatches it',async t=>{
+  const f=await fixture(t,{mode:'trust'});
+  assert.equal(f.pane.agent_status,'unknown');
+  assert.equal(f.pane.agent_session,null);
+  const parsed=detectClaudeQuestion(trustMenu(f.pane.cwd));
+  assert.equal(parsed?.kind,'claude_trust');
+  assert.equal(parsed?.selectedIndex,0);
+  assert.deepEqual(parsed?.options,['No, exit','Yes, I trust this folder']);
+  const shown=await f.attach();
+  assert.equal(shown.question?.kind,'claude_trust');
+  assert.equal(shown.question?.stage,'choices');
+  assert.equal(shown.question?.selectedIndex,0);
+  assert.equal(shown.question?.cancelAvailable,false);
+  assert.match(shown.question.prompt,/Accessing workspace:\n/);
+  assert.ok(shown.question.prompt.includes(f.pane.cwd));
+  assert.match(shown.question.prompt,/Quick safety check:.*review what's in this folder first\./s);
+  assert.match(shown.question.prompt,/Claude Code'll be able to read, edit, and execute files here\./);
+  assert.match(shown.question.prompt,/Security guide/);
+  assert.equal(writes(f.calls).length,0);
+  const body={operationId:'claude-trust-explicit-001',attachmentId:shown.attachmentId,
+    questionId:shown.question.id,option:1};
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',body)).status,200);
+  assert.deepEqual(writes(f.calls).map(call=>call.params.keys),[['down'],['enter']]);
+  assert.equal(f.state.kind,'done');
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {...body,operationId:'claude-trust-replay-002'})).status,409);
+});
+
+test('Claude startup trust rejects hidden, changed and incomplete prompts without confirming',async t=>{
+  const f=await fixture(t,{mode:'trust'});
+  const shown=await f.attach();
+  assert.equal(shown.question?.kind,'claude_trust');
+  for(const [suffix,action] of [['text',{text:'yes'}],['cancel',{cancel:true}],['extra',{option:2}]])
+    assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+      {operationId:`claude-trust-${suffix}-001`,attachmentId:shown.attachmentId,
+        questionId:shown.question.id,...action})).status,400);
+  assert.equal(writes(f.calls).length,0);
+  f.state.selected=1;
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {operationId:'claude-trust-stale-cursor-001',attachmentId:shown.attachmentId,
+      questionId:shown.question.id,option:0})).status,409);
+  assert.equal(writes(f.calls).length,0);
+  f.state.selected=0;
+  f.state.override=trustMenu(f.pane.cwd).replace('read, edit, and execute','read and edit');
+  assert.equal((await f.attach()).question,undefined);
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {operationId:'claude-trust-stale-warning-001',attachmentId:shown.attachmentId,
+      questionId:shown.question.id,option:1})).status,409);
+  f.state.override=trustMenu(f.pane.cwd)+'\r❯ New prompt';
+  assert.equal((await f.attach()).question,undefined);
+  f.state.override=trustMenu(`${f.pane.cwd}/another-folder`);
+  assert.equal((await f.attach()).question,undefined);
+  f.state.override=trustMenu(f.pane.cwd);f.state.truncated=true;
+  assert.equal((await f.attach()).question,undefined);
+  assert.equal(writes(f.calls).length,0);
+});
+
+test('Claude startup Exit confirms only the native Exit row',async t=>{
+  const f=await fixture(t,{mode:'trust'});
+  const shown=await f.attach();
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {operationId:'claude-trust-exit-001',attachmentId:shown.attachmentId,
+      questionId:shown.question.id,option:0})).status,200);
+  assert.deepEqual(writes(f.calls).map(call=>call.params.keys),[['enter']]);
+});
+
+test('Claude startup warning change during Trust navigation never receives Enter',async t=>{
+  const f=await fixture(t,{mode:'trust',onWrite:(method,params,state,pane)=>{
+    if(method==='pane.send_keys'&&params.keys[0]==='down')
+      state.override=trustMenu(pane.cwd,state.selected).replace('Security guide','Changed guide');
+  }});
+  const shown=await f.attach();
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {operationId:'claude-trust-changed-during-nav-001',attachmentId:shown.attachmentId,
+      questionId:shown.question.id,option:1})).status,409);
+  assert.deepEqual(writes(f.calls).map(call=>call.params.keys),[['down']]);
 });

@@ -78,6 +78,28 @@ class QuestionPresentationTest {
         assertTrue(decoded.cancelAvailable)
     }
 
+    @Test fun claudeFolderTrustRequiresTheObservedTwoChoicesAndWarning() {
+        val prompt = """Accessing workspace:
+/tmp/example-claude-project
+
+Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source
+project, or work from your team). If not, take a moment to review what's in this folder first.
+
+Claude Code'll be able to read, edit, and execute files here.
+
+Security guide"""
+        val trust = question.copy(prompt = prompt, options = listOf("No, exit", "Yes, I trust this folder"),
+            selectedIndex = 0, freeText = false, kind = "claude_trust")
+        assertTrue(trust.isValid())
+        assertTrue(trust.copy(selectedIndex = 1).isValid())
+        assertFalse(trust.copy(options = trust.options.reversed()).isValid())
+        assertFalse(trust.copy(options = listOf("Yes", "No")).isValid())
+        assertFalse(trust.copy(prompt = "Accessing workspace: /tmp/project").isValid())
+        assertFalse(trust.copy(cancelAvailable = true).isValid())
+        assertFalse(trust.copy(freeText = true).isValid())
+        assertFalse(trust.copy(stage = "text").isValid())
+    }
+
     @Test fun panePreflightRejectsChangedControlCapabilitiesAndAttachment() {
         val pane = Pane("p", "w", kind = "codex", status = "working")
         val state = RemoteState(online = true, selectedId = pane.id, terminalAttachmentId = "fresh",

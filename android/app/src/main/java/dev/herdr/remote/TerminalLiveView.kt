@@ -71,14 +71,17 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
     val nativeQuestion = state.question?.takeIf { state.snapshot.questionSelectionEnabled && it.isValid() }
     val hasNativeQuestion = state.snapshot.questionSelectionEnabled &&
         (nativeQuestion != null || state.questionReviewAvailable || state.questionPending)
+    val trustQuestion = nativeQuestion?.kind == "claude_trust"
     val readingIdentity = listOf(state.url, state.portalDeviceId, paneId, state.terminalAttachmentId)
     var nativeTerminalControls by remember(readingIdentity) { mutableStateOf(false) }
     LaunchedEffect(hasNativeQuestion) { if (!hasNativeQuestion) nativeTerminalControls = false }
+    LaunchedEffect(trustQuestion) { if (trustQuestion) nativeTerminalControls = false }
+    val usingTerminalControls = nativeTerminalControls && !trustQuestion
     val canPaneControl = attached && state.snapshot.terminalInputEnabled && state.snapshot.canControl && !state.busy &&
         !unresolvedDelivery && !state.modelMenuPending && state.agentModelMenu == null &&
         (pane?.kind != "terminal" || state.snapshot.allowTerminalInput)
     val canQuestionAct = canPaneControl && pane?.kind in setOf("codex", "claude") && state.selectedId == pane?.id && !state.questionPending
-    val canInput = canPaneControl && ((!hasNativeQuestion && !state.questionPending) || nativeTerminalControls)
+    val canInput = canPaneControl && ((!hasNativeQuestion && !state.questionPending) || usingTerminalControls)
     val canPrompt = canInput && pane?.kind != "terminal" && !hasNativeQuestion
     val canPickModel = canInput && !hasNativeQuestion && canChangeAgentModel(state, pane) && !state.modelMenuPending
     val modelButtonEnabled = canInput && !hasNativeQuestion && supportsModelSelection(state.snapshot, pane)
@@ -104,12 +107,12 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
     // terminal-only questions without changing the user's normal reading preference.
     // A queued or opening question has no readable native card yet. Keep its
     // live terminal visible until the bridge supplies the actual question.
-    val terminalQuestion = needsInput && (nativeQuestion == null || nativeTerminalControls)
+    val terminalQuestion = needsInput && (nativeQuestion == null || usingTerminalControls)
     var reviewConversation by remember(readingIdentity, terminalQuestion) { mutableStateOf(false) }
     val showTerminal = if (terminalQuestion) !reviewConversation else rawTerminal
     val history = state.structuredHistory?.takeIf { pane != null && pane.kind != "terminal" && it.available && it.messages.isNotEmpty() }
     val transcript = history != null && !showTerminal
-    val loadingTranscript = pane != null && pane.kind != "terminal" && state.structuredHistory == null && state.historyLoading && !showTerminal
+    val loadingTranscript = pane != null && pane.kind != "terminal" && state.structuredHistory == null && state.historyLoading && !showTerminal && !trustQuestion
     LaunchedEffect(readingIdentity, terminalQuestion) { if (terminalQuestion) heldOutput = null }
     var fontSize by rememberSaveable(paneId) { mutableFloatStateOf(15f) }
     var showKeys by rememberSaveable(paneId) { mutableStateOf(false) }
@@ -297,12 +300,12 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
             Column(Modifier.fillMaxWidth().onSizeChanged { controlsHeightPx = it.height },
                 verticalArrangement = Arrangement.spacedBy(4.dp)) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            if (hasNativeQuestion) TextButton(onClick = {
+            if (hasNativeQuestion && !trustQuestion) TextButton(onClick = {
                 nativeTerminalControls = !nativeTerminalControls
                 reviewConversation = false
                 heldOutput = null
-            }) { Text(if (nativeTerminalControls) "Use answer buttons" else "Use terminal controls") }
-            if (hasNativeQuestion && !nativeTerminalControls) TerminalQuestionCard(nativeQuestion, state.questionReviewAvailable,
+            }) { Text(if (usingTerminalControls) "Use answer buttons" else "Use terminal controls") }
+            if (hasNativeQuestion && !usingTerminalControls) TerminalQuestionCard(nativeQuestion, state.questionReviewAvailable,
                 state.questionPending, canQuestionAct, state.terminalAttachmentId,
                 paneId?.let { state.deliveries[it]?.id }, state.message,
                 onReviewQuestion, onAnswerQuestion, onCancelQuestion)

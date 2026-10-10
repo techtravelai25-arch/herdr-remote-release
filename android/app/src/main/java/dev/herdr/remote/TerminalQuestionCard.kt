@@ -65,7 +65,11 @@ import androidx.compose.ui.unit.dp
                     Text(if (revealPending) "Opening question…" else "Review question")
                 }
             } else {
-                Text(if (validQuestion.stage == "review") "Review and submit answers" else "Answer the question", style = MaterialTheme.typography.titleSmall)
+                Text(when {
+                    validQuestion.kind == "claude_trust" -> "Claude Code folder trust"
+                    validQuestion.stage == "review" -> "Review and submit answers"
+                    else -> "Answer the question"
+                }, style = MaterialTheme.typography.titleSmall)
                 Text(validQuestion.prompt, style = MaterialTheme.typography.bodyMedium)
                 if (validQuestion.stage == "multi") Text("Tap to select or clear an option. Then choose Next or Submit.",
                     style = MaterialTheme.typography.bodySmall)

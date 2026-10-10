@@ -28,7 +28,7 @@ Run unit tests, debug/release lint, the APK linkage check, and the relevant emul
 From the repository root, with `ANDROID_HOME` set to the SDK:
 
 ```sh
-python3 scripts/package-release.py --apk android/app/build/outputs/apk/release/app-release.apk --tag v0.8.38 --out artifacts
+python3 scripts/package-release.py --apk android/app/build/outputs/apk/release/app-release.apk --tag v0.8.39 --out artifacts
 ```
 
 The packaging check rejects a different certificate, package ID, debuggable APK, version mismatch, or stale legal notices. After committing the tested public source, run `ops/package-source.sh artifacts` to create `herdr-remote-source.tar.gz` with the matching source revision. Publish that archive, `herdr-remote.apk`, `SHA256SUMS`, `app-update.json`, `release-signing.json`, and the three notice files with the matching source tag. Include every other asset in `SHA256SUMS`. Release assets are not committed to Git.
@@ -40,6 +40,7 @@ For changes to Claude Code question controls, also run the opt-in native fixture
 ```sh
 HERDR_ENV=1 npm run test:claude-herdr
 HERDR_ENV=1 npm run test:claude-herdr -- --multi
+HERDR_ENV=1 npm run test:claude-herdr -- --trust-exit
 ```
 
 It starts isolated test panes and a local fake model endpoint and checks the exact submitted tool result. Do not use active user panes as test fixtures.

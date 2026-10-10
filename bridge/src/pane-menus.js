@@ -93,7 +93,8 @@ export function createPaneMenus({herdr,store}) {
                   :native.options,
                 selectedIndex:native.selectedIndex,
                 freeText:false,stage:native.stage,
-                ...(current.agent==='claude'?{cancelAvailable:true,multiSelect:native.multiSelect,
+                ...(current.agent==='claude'?{cancelAvailable:native.kind!=='claude_trust',
+                  ...(native.kind?{kind:native.kind}:{}),multiSelect:native.multiSelect,
                   selectedOptions:native.selectedOptions}:{} )};
           }
         } else if(!questionAwaitingTransition) questionRequests.delete(qKey);
