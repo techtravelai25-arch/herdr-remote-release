@@ -109,7 +109,7 @@ async function fixture(t,{onWrite,mode='single'}={}) {
   const state={selected:0,prompt:'How should uploads be read?',kind:mode==='trust'?'trust':'menu',mode,
     draft:'',checked:[],truncated:false,override:null,homeCaret:false};
   const calls=[];
-  const screen=()=>state.override??(state.kind==='trust'?trustMenu(dir,state.selected):state.kind==='review'?review():state.kind==='menu'
+  const screen=()=>state.override??(state.kind==='shell'?`fixture@localhost:${dir}$ `:state.kind==='trust'?trustMenu(dir,state.selected):state.kind==='review'?review():state.kind==='menu'
     ?(state.mode==='multi'?multiMenu(state.selected,state.checked,state.draft)
       :state.homeCaret&&state.draft==='Type something.'
         ?menu(state.selected,state.prompt,state.draft).replace('5. Type something.',
@@ -130,7 +130,11 @@ async function fixture(t,{onWrite,mode='single'}={}) {
       }
       if(params.keys[0]==='esc')state.kind='done';
       if(params.keys[0]==='enter') {
-        if(state.kind==='trust'||state.kind==='review')state.kind='done';
+        if(state.kind==='trust') {
+          if(state.selected===0){state.kind='shell';pane.agent=undefined;}
+          else state.kind='done';
+        }
+        else if(state.kind==='review')state.kind='done';
         else if(state.mode==='multi') {
           if(state.selected===5)state.kind='review';
           else if(state.selected<4)state.checked=state.checked.includes(state.selected)
@@ -512,6 +516,82 @@ test('Claude startup Exit confirms only the native Exit row',async t=>{
   assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
     {operationId:'claude-trust-exit-001',attachmentId:shown.attachmentId,
       questionId:shown.question.id,option:0})).status,200);
+  assert.deepEqual(writes(f.calls).map(call=>call.params.keys),[['enter']]);
+});
+
+test('Claude startup Exit followed by immediate same-pane relaunch offers a new trust card',async t=>{
+  const f=await fixture(t,{mode:'trust'});
+  const first=await f.attach(),second=await f.attach(f.second.token);
+  assert.equal(first.question?.kind,'claude_trust');
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {operationId:'claude-trust-exit-relaunch-001',attachmentId:first.attachmentId,
+      questionId:first.question.id,option:0})).status,200);
+  assert.equal(f.state.kind,'shell');
+  assert.ok(f.calls.some(call=>call.method==='pane.read'&&call.params.format==='text'));
+  f.state.kind='trust';f.state.selected=0;f.pane.agent='claude';
+  const relaunched=await f.attach();
+  assert.equal(relaunched.questionAwaitingTransition,false);
+  assert.equal(relaunched.question?.kind,'claude_trust');
+  assert.notEqual(relaunched.question.id,first.question.id);
+  assert.equal((await f.request(f.second.token,`${route}/answer`,'POST',
+    {operationId:'claude-trust-old-phone-001',attachmentId:second.attachmentId,
+      questionId:second.question.id,option:1})).status,409);
+  assert.deepEqual(writes(f.calls).map(call=>call.params.keys),[['enter']]);
+});
+
+test('Claude startup Exit cannot reauthorize a trust frame without an observed shell',async t=>{
+  const f=await fixture(t,{mode:'trust',onWrite:(method,params,state,pane)=>{
+    if(method==='pane.send_keys'&&params.keys[0]==='enter'&&state.kind==='shell'){
+      state.kind='trust';pane.agent=undefined;
+    }
+  }});
+  const shown=await f.attach();
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {operationId:'claude-trust-no-exit-proof-001',attachmentId:shown.attachmentId,
+      questionId:shown.question.id,option:0})).status,200);
+  f.pane.agent='claude';
+  const lingering=await f.attach();
+  assert.equal(lingering.question,undefined);
+  assert.equal(lingering.questionAwaitingTransition,true);
+  assert.deepEqual(writes(f.calls).map(call=>call.params.keys),[['enter']]);
+});
+
+test('Claude startup Exit keeps the trust frame retired when the shell read is truncated',async t=>{
+  const f=await fixture(t,{mode:'trust',onWrite:(method,params,state)=>{
+    if(method==='pane.send_keys'&&params.keys[0]==='enter'&&state.kind==='shell')
+      state.truncated=true;
+  }});
+  const shown=await f.attach();
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {operationId:'claude-trust-truncated-shell-001',attachmentId:shown.attachmentId,
+      questionId:shown.question.id,option:0})).status,200);
+  assert.equal(f.state.kind,'shell');
+  f.state.truncated=false;f.state.kind='trust';f.pane.agent='claude';
+  const replayed=await f.attach();
+  assert.equal(replayed.question,undefined);
+  assert.equal(replayed.questionAwaitingTransition,true);
+  assert.deepEqual(writes(f.calls).map(call=>call.params.keys),[['enter']]);
+});
+
+test('Claude startup Exit can retire later after a complete shell appears',async t=>{
+  const f=await fixture(t,{mode:'trust',onWrite:(method,params,state,pane)=>{
+    if(method==='pane.send_keys'&&params.keys[0]==='enter'&&state.kind==='shell'){
+      state.kind='trust';pane.agent='claude';
+    }
+  }});
+  const first=await f.attach();
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {operationId:'claude-trust-late-shell-001',attachmentId:first.attachmentId,
+      questionId:first.question.id,option:0})).status,200);
+  assert.equal((await f.attach()).questionAwaitingTransition,true);
+  f.state.kind='shell';f.pane.agent=undefined;
+  const shell=await f.attach();
+  assert.equal(shell.question,undefined);
+  assert.equal(shell.questionAwaitingTransition,false);
+  f.state.kind='trust';f.pane.agent='claude';
+  const relaunched=await f.attach();
+  assert.equal(relaunched.question?.kind,'claude_trust');
+  assert.notEqual(relaunched.question.id,first.question.id);
   assert.deepEqual(writes(f.calls).map(call=>call.params.keys),[['enter']]);
 });
 

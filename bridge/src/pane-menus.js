@@ -10,6 +10,35 @@ const requestKey=(deviceId,paneId)=>JSON.stringify([deviceId,paneId]);
 const retiredKey=id=>createHash('sha256').update(id).digest('hex');
 const identityHash=pane=>createHash('sha256').update(paneIdentity(pane)).digest('hex');
 const QUESTION_TTL=120000;
+const pause=()=>new Promise(resolve=>setTimeout(resolve,50));
+const sameTerminal=(a,b)=>a?.pane_id===b?.pane_id&&a?.terminal_id===b?.terminal_id&&
+  a?.workspace_id===b?.workspace_id&&a?.tab_id===b?.tab_id;
+
+// A trust Exit leaves Claude but keeps the same pane and terminal. Its next
+// launch can render the identical trust prompt with no agent_session value.
+// Observe the intervening shell before retiring that question generation.
+async function observedClaudeTrustShell(herdr,id,first) {
+  try {
+    const before=(await herdr.call('pane.get',{pane_id:id})).pane;
+    if(!sameTerminal(before,first)||before.agent)return false;
+    const beforeIdentity=paneIdentity(before);
+    const {read}=await herdr.call('pane.read',{pane_id:id,source:'visible',
+      format:'text',lines:120});
+    const after=(await herdr.call('pane.get',{pane_id:id})).pane;
+    const last=typeof read.text==='string'
+      ?read.text.replace(/\r\n?/g,'\n').trimEnd().split('\n').at(-1):'';
+    return sameTerminal(after,first)&&!after.agent&&paneIdentity(after)===beforeIdentity&&
+      !read.truncated&&/^[^\n]*[$#%]\s*$/.test(last);
+  } catch { return false; }
+}
+async function observedClaudeTrustExit(herdr,id,first) {
+  const deadline=Date.now()+2500;
+  while(Date.now()<deadline) {
+    if(await observedClaudeTrustShell(herdr,id,first))return true;
+    await pause();
+  }
+  return false;
+}
 
 /** Per-device native question and agent model-picker state for each pane. */
 export function createPaneMenus({herdr,store}) {
@@ -23,20 +52,24 @@ export function createPaneMenus({herdr,store}) {
   const questionReveals=new Map();
   let questionRetired=new Map(Object.entries(store.read('question-retired.json',{})));
   function saveQuestionRetired(next) {
-    // Commit tombstones before dispatch. They contain hashes only: neither
-    // the user's question nor the terminal/pane identity is stored verbatim.
+    // Commit tombstones before dispatch. They contain hashed identity/question
+    // and an optional Exit phase marker, never verbatim pane or question text.
     store.write('question-retired.json',Object.fromEntries(next));
     questionRetired=next;
   }
-  function retireQuestion(id,pane,semantic) {
+  function retireQuestion(id,pane,semantic,kind) {
     const next=new Map(questionRetired);
-    next.set(retiredKey(id),{identity:identityHash(pane),semantic});
+    next.set(retiredKey(id),{identity:identityHash(pane),semantic,...(kind?{kind}:{})});
     saveQuestionRetired(next);
   }
   function clearRetiredQuestion(id) {
     const key=retiredKey(id);
     if(!questionRetired.has(key))return;
     const next=new Map(questionRetired);next.delete(key);saveQuestionRetired(next);
+  }
+  function clearQuestionRequests(id) {
+    for(const [key,request] of questionRequests)
+      if(request.paneId===id)questionRequests.delete(key);
   }
   /** Drop requests and tombstones for panes that no longer exist. */
   function prune(live) {
@@ -104,6 +137,10 @@ export function createPaneMenus({herdr,store}) {
         questionAwaitingTransition=questionRetired.has(retiredKey(id)) ||
           Boolean(previousReveal?.attempted && previousReveal.identity===paneIdentity(current));
       }
+    } else if(!busy && questionRetired.get(retiredKey(id))?.kind==='claude_trust_exit' &&
+        await observedClaudeTrustShell(herdr,id,current)) {
+      clearRetiredQuestion(id);
+      clearQuestionRequests(id);
     }
     return {question,questionReviewAvailable,questionAwaitingTransition};
   }
@@ -134,7 +171,7 @@ export function createPaneMenus({herdr,store}) {
       ...(agentModelMenu?{agentModelMenu,...(current.agent==='codex'?{codexModelMenu:agentModelMenu}:{})}:{})};
   }
   /** Reveal or answer the question this device saw. Runs under the pane lock. */
-  function questionAction(action,deviceId,id,current,b) {
+  async function questionAction(action,deviceId,id,current,b) {
     if(current.agent!=='codex'&&current.agent!=='claude')
       reject('question_unavailable','This pane does not have a supported native question.',409);
     if(action==='question-review') {
@@ -149,14 +186,21 @@ export function createPaneMenus({herdr,store}) {
     if(!request || request.attempted || request.id!==b.questionId || request.identity!==paneIdentity(current) || request.expiresAt<Date.now())
       reject('question_stale','The question changed. Refresh before answering.',409);
     const act=current.agent==='claude'?actClaudeQuestion:actCodexQuestion;
-    return act(herdr,id,current,request.question,{option:b.option,text:b.text,cancel:b.cancel},()=>{
+    const trustExit=current.agent==='claude'&&request.question.kind==='claude_trust'&&b.option===0;
+    const result=await act(herdr,id,current,request.question,{option:b.option,text:b.text,cancel:b.cancel},()=>{
       // Another phone may have observed the same frame. Once any key is
       // dispatched, all those authorizations are obsolete.
       retireQuestion(id,current,current.agent==='claude'
-        ?claudeQuestionSemantic(request.question,current):questionSemantic(request.question,current));
+        ?claudeQuestionSemantic(request.question,current):questionSemantic(request.question,current),
+      trustExit?'claude_trust_exit':undefined);
       for(const entry of questionRequests.values())
         if(entry.paneId===id && entry.identity===request.identity) entry.attempted=true;
     });
+    if(trustExit&&result.dispatched&&await observedClaudeTrustExit(herdr,id,current)) {
+      clearRetiredQuestion(id);
+      clearQuestionRequests(id);
+    }
+    return result;
   }
   /** Open, navigate, select or cancel the agent model picker. Runs under the pane lock. */
   async function modelAction(action,deviceId,id,current,b) {
