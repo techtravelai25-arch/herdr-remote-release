@@ -72,7 +72,7 @@ test('native completion persists across title flicker; PC idle marks it seen; ne
   assert.equal(f.status.status('p1','done'),'done');
   assert.equal(f.status.status('p1','working'),'done','a title spinner cannot reopen the completed turn');
   assert.equal(await f.observe('idle','p1'),'idle');
-  assert.equal(f.status.status('p1','working'),'idle','focus acknowledgement survives title flicker');
+  assert.equal(f.status.status('p1','working'),'idle','idle acknowledgement survives title flicker');
   f.user(13_000);
   assert.equal(await f.observe('done',null),'working','new transcript activity starts a new turn');
   f.assistant(14_000);f.duration(14_100);
@@ -176,7 +176,7 @@ test('a partial append and a resumed turn during settling cannot publish an earl
   assert.equal(f.status.status('p1','done'),'done');
 });
 
-test('bridge publishes one verified Claude completion across HTTP and status events',async t=>{
+test('bridge publishes one verified Claude completion while its pane stays focused across HTTP and status events',async t=>{
   const f=fixture(t);
   let rawStatus='working',hooks,clock=10_000;
   f.user(1000);
@@ -184,7 +184,7 @@ test('bridge publishes one verified Claude completion across HTTP and status eve
     if(method==='pane.get')return {pane:{...f.pane,agent_status:rawStatus,agent_session:{agent:'claude',kind:'id',value:sessionId}}};
     if(method==='pane.process_info')return {process_info:{foreground_processes:[{name:'claude',pid:process.pid,cwd:f.home,argv:['claude']}]}};
     assert.equal(method,'session.snapshot');
-    return {snapshot:{protocol:22,workspaces:[{workspace_id:'w1'}],panes:[{...f.pane,agent_status:rawStatus,agent_session:{agent:'claude',kind:'id',value:sessionId}}],agents:[],focused_pane_id:null}};
+    return {snapshot:{protocol:22,workspaces:[{workspace_id:'w1'}],panes:[{...f.pane,agent_status:rawStatus,agent_session:{agent:'claude',kind:'id',value:sessionId}}],agents:[],focused_pane_id:'p1'}};
   }};
   const observed=[];
   const app=createBridge({socketPath:'/unused',stateDir:path.join(f.home,'state'),projects:[],activityTimeline:false},
@@ -208,6 +208,7 @@ test('bridge publishes one verified Claude completion across HTTP and status eve
   assert.equal((await get()).status,'working');
   clock=12_000;
   const done=await get();assert.equal(done.status,'done');assert.ok(done.completionEventId);
+  assert.equal(done.completionAcknowledged,false);
   await hooks.onStatus({pane_id:'p1',agent_status:'working'});
   const same=await get();assert.equal(same.status,'done');assert.equal(same.completionEventId,done.completionEventId);
   f.append('system',3200,{subtype:'compact_boundary'});
@@ -220,6 +221,7 @@ test('bridge publishes one verified Claude completion across HTTP and status eve
   assert.equal((await get()).status,'working');
   clock=16_000;
   const next=await get();assert.equal(next.status,'done');assert.ok(next.completionEventId);
+  assert.equal(next.completionAcknowledged,false);
   assert.notEqual(next.completionEventId,done.completionEventId);
   await hooks.onStatus({pane_id:'p1',agent_status:'blocked'});
   assert.equal(observed.at(-1).panes[0].status,'blocked');

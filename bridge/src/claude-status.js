@@ -25,8 +25,8 @@ export class ClaudeStatus {
       const entry=old?.key===key?old:{key,seen:null,published:null,candidate:null};
       // Session discovery can await an RPC. Reconcile status after that await
       // so an older snapshot cannot acknowledge a newer completion event.
-      const {status:rawStatus,focused}=currentState(pane);
-      entry.inputKey=inputKey;entry.session=session;entry.focused=focused;
+      const {status:rawStatus}=currentState(pane);
+      entry.inputKey=inputKey;entry.session=session;
       entry.generation=generation;entry.verification=pane.binding?.state??(session?'verified':'unverified');
       entry.bindingReason=pane.binding?.reason??(session?'legacy_session':'unknown_identity');
       this.panes.set(pane.pane_id,entry);
@@ -75,7 +75,7 @@ export class ClaudeStatus {
       entry.candidate=null;return meta('working','input_waiting_for_new_turn');
     }
     if(lifecycle.state==='active') {entry.candidate=null;return meta('working','native_active');}
-    if(rawStatus==='idle'||entry.focused)entry.seen=lifecycle.key;
+    if(rawStatus==='idle')entry.seen=lifecycle.key;
     if(entry.seen===lifecycle.key) {entry.candidate=null;return meta('idle','native_seen');}
     if(entry.published===lifecycle.key)return meta('done','native_complete');
     if(lifecycle.state!=='complete'||rawStatus!=='done') {

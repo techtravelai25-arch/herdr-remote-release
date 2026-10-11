@@ -1,4 +1,15 @@
-# Herdr Remote 0.8.44
+# Herdr Remote 0.8.45
+
+Android 0.8.45 (80) and laptop companion 0.8.45 (sequence 82). Update both the app and companion. The signed community APK updates 0.8.44 in place with the same certificate.
+
+- A selected laptop pane no longer counts as reading every new Claude Code or Codex reply. Verified completions remain eligible for a phone notification until Herdr reports them seen or a new input acknowledges them.
+- The companion keeps distinct completion events across successive native turns while retaining duplicate prevention and explicit acknowledgement.
+
+The default community APK uses QR pairing with optional cloud endpoints disabled. See [validation and limits](release-validation.md).
+
+Download [herdr-remote.apk](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) and follow [laptop setup](setup.md). Android 8.0+ is required.
+
+## Herdr Remote 0.8.44
 
 Android 0.8.44 (79) and laptop companion 0.8.44 (sequence 81). Update both the app and companion. The signed community APK updates 0.8.43 in place with the same certificate.
 

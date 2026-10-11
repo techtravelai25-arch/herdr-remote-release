@@ -8,7 +8,7 @@ const identity = pane => JSON.stringify([pane.pane_id,pane.terminal_id,pane.work
 // Correct only that working state, using the exact conversation's lifecycle.
 export class CodexStatus {
   constructor(home) { this.home=home;this.panes=new Map();this.inputs=new Map(); }
-  async observe(panes,focusedPaneId) {
+  async observe(panes,_focusedPaneId) {
     const live=new Set(panes.map(p=>p.pane_id));
     for(const id of this.panes.keys())if(!live.has(id))this.panes.delete(id);
     for(const id of this.inputs.keys())if(!live.has(id))this.inputs.delete(id);
@@ -22,7 +22,7 @@ export class CodexStatus {
       const key=JSON.stringify([generation,session]);
       const old=this.panes.get(pane.pane_id);
       const entry=old?.key===key?old:{key,seenTurn:null};
-      entry.inputKey=inputKey;entry.focused=pane.pane_id===focusedPaneId;
+      entry.inputKey=inputKey;
       entry.session=session;entry.verification=verification;entry.generation=generation;
       entry.bindingReason=pane.binding?.reason??(session?'legacy_session':'unknown_identity');
       this.panes.set(pane.pane_id,entry);
@@ -62,7 +62,8 @@ export class CodexStatus {
       if(input.turnId!==lifecycle.turnId)return meta('working','input_waiting_for_new_turn');
     }
     if(lifecycle.state==='active')return meta('working','native_active');
-    if(rawStatus==='idle'||entry.focused)entry.seenTurn=lifecycle.turnId;
+    // Focus can predate the reply; only an observed idle state proves it was seen.
+    if(rawStatus==='idle')entry.seenTurn=lifecycle.turnId;
     if(lifecycle.state==='aborted')return meta('idle','native_aborted');
     if(rawStatus!=='working')return meta(rawStatus,rawStatus==='idle'?'native_seen':'native_complete');
     return meta(entry.seenTurn===lifecycle.turnId?'idle':'done',entry.seenTurn===lifecycle.turnId?'native_seen':'native_complete');

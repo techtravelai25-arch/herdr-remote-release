@@ -24,12 +24,14 @@ function fixture(t) {
   const status=new CodexStatus(home);
   return {home,file,pane,append,status};
 }
-test('native completion clears a retained working title and stays seen after PC focus',async t=>{
+test('native completion clears a retained working title; focus alone cannot acknowledge it',async t=>{
   const f=fixture(t);f.append('task_started','a',1000);
   assert.equal((await f.status.observe([f.pane],null))[0].agent_status,'working');
   f.append('task_complete','a',2000);
   assert.equal((await f.status.observe([f.pane],null))[0].agent_status,'done');
-  assert.equal((await f.status.observe([f.pane],'p1'))[0].agent_status,'idle');
+  assert.equal((await f.status.observe([f.pane],'p1'))[0].agent_status,'done');
+  assert.equal(f.status.metadata('p1').nativeReason,'native_complete');
+  assert.equal(f.status.status('p1','idle'),'idle','an explicit PC idle state acknowledges the turn');
   assert.equal((await f.status.observe([f.pane],null))[0].agent_status,'idle');
   f.append('task_started','b',3000);
   assert.equal(f.status.status('p1','working'),'working');
@@ -91,13 +93,14 @@ test('pane replacement clears correction and seen state; unreadable or partial n
   assert.equal(f.status.status('p1','working'),'working');
   await f.status.observe([],null);assert.equal(f.status.status('p1','working'),'working');
 });
-test('title and foreground directory changes preserve dispatch barrier and seen completion for the same session',async t=>{
+test('title and foreground directory changes preserve dispatch barrier and explicit seen completion for the same session',async t=>{
   const f=fixture(t);f.append('task_started','a',1000);f.append('task_complete','a',2000);
   await f.status.observe([f.pane],null);f.status.inputStarted(f.pane,3000);
   const renamed={...f.pane,terminal_title_stripped:'Renamed | elsewhere',foreground_cwd:'/elsewhere'};
   assert.equal((await f.status.observe([renamed],null))[0].agent_status,'working');
   f.append('task_started','b',4000);f.append('task_complete','b',5000);
-  assert.equal((await f.status.observe([renamed],'p1'))[0].agent_status,'idle');
+  assert.equal((await f.status.observe([renamed],'p1'))[0].agent_status,'done');
+  assert.equal(f.status.status('p1','idle'),'idle');
   assert.equal((await f.status.observe([f.pane],null))[0].agent_status,'idle');
 });
 test('a witnessed new turn can complete after its start leaves the bounded tail',async t=>{
@@ -114,7 +117,7 @@ test('confirmation within an active turn does not fence its later completion',as
   f.append('task_complete','a',3000);assert.equal(f.status.status('p1','working'),'done');
 });
 
-test('bridge HTTP and immediate events reconcile native completion without duplicate reply alerts',async t=>{
+test('bridge HTTP and immediate events keep focused native completions eligible without duplicate reply alerts',async t=>{
   const f=fixture(t);f.append('task_started','a',1000);let hooks;let reads=0;
   const herdr={call:async method=>{
     if(method==='pane.get')return {pane:f.pane};
@@ -122,7 +125,7 @@ test('bridge HTTP and immediate events reconcile native completion without dupli
     if(method==='pane.read')return {read:{text:'terminal',revision:1,truncated:false}};
     if(['pane.send_keys','pane.send_input','agent.prompt'].includes(method))return {accepted:true};
     assert.equal(method,'session.snapshot');reads++;
-    return {snapshot:{protocol:22,workspaces:[{workspace_id:'w1'}],panes:[f.pane],agents:[],focused_pane_id:null}};
+    return {snapshot:{protocol:22,workspaces:[{workspace_id:'w1'}],panes:[f.pane],agents:[],focused_pane_id:'p1'}};
   }};
   const observed=[];
   const app=createBridge({socketPath:'/unused',stateDir:path.join(f.home,'state'),projects:[],activityTimeline:false},
@@ -140,6 +143,7 @@ test('bridge HTTP and immediate events reconcile native completion without dupli
   const before=reads;await hooks.onStatus({pane_id:'p1',agent_status:'working'});
   assert.equal(reads,before+1,'native event reconciliation rechecks the live binding');
   const done=await get();assert.equal(done.status,'done');assert.ok(done.completionEventId);
+  assert.equal(done.completionAcknowledged,false);
   await hooks.onStatus({pane_id:'p1',agent_status:'working'});
   assert.equal((await get()).completionEventId,done.completionEventId);
   f.append('task_started','b',3000);
@@ -150,6 +154,7 @@ test('bridge HTTP and immediate events reconcile native completion without dupli
   await hooks.onStatus({pane_id:'p1',agent_status:'working'});
   f.append('task_complete','b',4000);
   const next=await get();assert.equal(next.status,'done');assert.notEqual(next.completionEventId,done.completionEventId);
+  assert.equal(next.completionAcknowledged,false);
   const base=`http://127.0.0.1:${app.server.address().port}`;
   const headers={Authorization:`Bearer ${credential.token}`,'Content-Type':'application/json'};
   const output=await(await fetch(base+'/v1/panes/p1/output',{headers})).json();assert.ok(output.attachmentId);
