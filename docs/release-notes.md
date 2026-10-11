@@ -1,4 +1,16 @@
-# Herdr Remote 0.8.43
+# Herdr Remote 0.8.44
+
+Android 0.8.44 (79) and laptop companion 0.8.44 (sequence 81). Update both the app and companion. The signed community APK updates 0.8.43 in place with the same certificate.
+
+- A completed Claude Code question clears from the phone when the normal desktop input box contains a draft. The companion checks the complete input box and status footer before retiring the old question.
+- The phone checks for fresh terminal output while a question action is pending. Until the next frame is verified, it shows the terminal and a checking state instead of claiming an old question still needs a decision.
+- A pane's idle status alone does not clear an unresolved question or enable reuse of an earlier answer.
+
+The default community APK uses QR pairing with optional cloud endpoints disabled. See [validation and limits](release-validation.md).
+
+Download [herdr-remote.apk](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) and follow [laptop setup](setup.md). Android 8.0+ is required.
+
+## Herdr Remote 0.8.43
 
 Android 0.8.43 (78) and laptop companion 0.8.43 (sequence 80). The signed community APK updates 0.8.39 in place with the same certificate. Update both the app and companion.
 

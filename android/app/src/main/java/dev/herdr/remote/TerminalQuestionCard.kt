@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
     question: BridgeQuestion?,
     reviewAvailable: Boolean,
     revealPending: Boolean,
+    pendingLabel: String,
     enabled: Boolean,
     attachmentId: String?,
     receiptId: String?,
@@ -57,12 +58,12 @@ import androidx.compose.ui.unit.dp
         Column(Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(questionScroll)
             .padding(horizontal = 12.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (validQuestion == null) {
-                Text("Question waiting in terminal", style = MaterialTheme.typography.titleSmall)
-                Text("Open the current question to read it and answer.", style = MaterialTheme.typography.bodySmall,
+                Text(if (revealPending) "Terminal update pending" else "Question waiting in terminal", style = MaterialTheme.typography.titleSmall)
+                Text(if (revealPending) "Waiting for an updated terminal view." else "Open the current question to read it and answer.", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Button(onClick = { requested = true; onReviewQuestion() }, enabled = canAct,
                     modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 16.dp)) {
-                    Text(if (revealPending) "Opening question…" else "Review question")
+                    Text(if (revealPending) pendingLabel else "Review question")
                 }
             } else {
                 Text(when {

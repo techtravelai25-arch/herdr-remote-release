@@ -15,6 +15,40 @@ class QuestionPresentationTest {
         assertNull(output.question)
     }
 
+    @Test fun dispatchedReviewWaitsForDelayedQuestionAndThenShowsItsActualChoices() {
+        val opening = observeQuestion(Output(questionReviewAvailable = true), true, false, false, null, true)
+        assertTrue(opening.pending)
+        assertNull(opening.question)
+        val arrived = observeQuestion(Output(question = question), true, false, false, null, true)
+        assertFalse(arrived.pending)
+        assertEquals(question, arrived.question)
+    }
+
+    @Test fun freshOutputWithoutQuestionOrTransitionClearsDispatchedReview() {
+        val noQuestion = observeQuestion(Output(text = "Brewed and done"), true, false, false, null, true)
+        assertFalse(noQuestion.pending)
+        assertFalse(noQuestion.reviewAvailable)
+        assertNull(noQuestion.question)
+    }
+
+    @Test fun bridgeTransitionRemainsPendingUntilFreshOutputResolvesIt() {
+        val opening = observeQuestion(Output(questionAwaitingTransition = true), true, false, false, null, false)
+        assertTrue(opening.pending)
+        val resolved = observeQuestion(Output(text = "Finished", questionAwaitingTransition = false),
+            true, false, false, null, false)
+        assertFalse(resolved.pending)
+    }
+
+    @Test fun oldQuestionIsNotReenabledWhileItsTerminalFrameLingers() {
+        val old = observeQuestion(Output(question = question), true, false, false, question.id, false)
+        assertTrue(old.pending)
+        assertNull(old.question)
+        assertTrue(old.dismissedQuestionStillVisible)
+        val gone = observeQuestion(Output(), true, false, false, question.id, false)
+        assertFalse(gone.pending)
+        assertFalse(gone.dismissedQuestionStillVisible)
+    }
+
     @Test fun liveQuestionMetadataPreservesActualChoicesAndCursor() {
         val output = Bridge.json.decodeFromString<Output>("""{"question":{"id":"${question.id}","prompt":"Which preview should this test use?","options":["Keep current preview","Use compact preview","Other"],"selectedIndex":1,"freeText":true,"stage":"choices"}}""")
         assertTrue(output.question!!.isValid())

@@ -34,7 +34,7 @@ android {
     namespace = "dev.herdr.remote"
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/distribution-notices"))
     compileSdk = 36
-    defaultConfig { applicationId = "dev.herdr.remote.community"; minSdk = 26; targetSdk = 36; versionCode = 78; versionName = "0.8.43"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "dev.herdr.remote.community"; minSdk = 26; targetSdk = 36; versionCode = 79; versionName = "0.8.44"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     defaultConfig {
         buildConfigField("String", "PORTAL_ORIGIN", "\"$portalOrigin\"")
         buildConfigField("String", "UPDATE_ORIGIN", "\"$updateOrigin\"")

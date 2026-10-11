@@ -230,6 +230,27 @@ export const claudeQuestionSemantic=(question,pane)=>hash({pane:paneIdentity(pan
   selectedOptions:question.selectedOptions,otherDraft:question.otherDraft,
   contextHeader:question.contextHeader});
 
+function hasNormalClaudeComposer(text) {
+  const lines=stripVTControlCharacters(text).replace(/\r\n?/g,'\n').split('\n');
+  const index=lines.findLastIndex(line=>/^\s*❯[\s\u00a0]*(?!\d{1,2}\.\s)\S.*$/.test(line)||
+    /^\s*❯\s*$/.test(line));
+  if(index<0)return false;
+  const draft=lines[index].replace(/^\s*❯[\s\u00a0]*/,'').trim();
+  if(/^(?:Submit(?: answers)?|Next|Cancel|Type something\.?)$/i.test(draft))return false;
+  const horizontal=line=>/^\s*[─━═▔]{3,}\s*$/.test(line);
+  const before=lines.slice(0,index).findLast(line=>line.trim());
+  const after=lines.slice(index+1);
+  const first=after.find(line=>line.trim());
+  if(!horizontal(first))return false;
+  const content=after.filter(line=>line.trim()&&!horizontal(line));
+  const status=/^\s*(?:\? for shortcuts\b|← for agents\b|⏵⏵\s*(?:manual|auto) mode on\b|\[[^\]\n]{1,80}\].*\b\d+%\s+ctx\b|Context\s+\d+%\s+left\b|tab to queue message\b)/i;
+  // A desktop draft is still the normal composer. Require its closing border
+  // and current status footer so an unfinished choice row cannot retire a
+  // question. Drafts additionally need the opening border of the composer.
+  return content.length>0&&content.length<=3&&content.every(line=>status.test(line))&&
+    (!draft||horizontal(before));
+}
+
 export async function readClaudeQuestionScreen(herdr,id,first) {
   const before=(await herdr.call('pane.get',{pane_id:id})).pane;
   if(paneIdentity(before)!==paneIdentity(first)||before.agent!=='claude')
@@ -241,14 +262,9 @@ export async function readClaudeQuestionScreen(herdr,id,first) {
   let question=read.truncated?null:detectClaudeQuestion(read.text);
   if(question?.kind==='claude_trust'&&[first,before,after].some(pane=>
     (pane.foreground_cwd??pane.cwd)!==question.workspacePath))question=null;
-  const visible=typeof read.text==='string'?stripVTControlCharacters(read.text):'';
-  const visibleLines=visible.split('\n');
-  const composerIndex=visibleLines.findLastIndex(line=>/^\s*❯\s*(?:Try \".*\")?\s*$/.test(line));
-  const trailingContent=visibleLines.slice(composerIndex+1).filter(line=>line.trim()&&!border.test(line));
   // Only a bottom composer proves the prior question has gone. An older
   // composer above a partially painted current menu is just scrollback.
-  const normalComposer=composerIndex>=0&&trailingContent.length<=3&&
-    trailingContent.every(line=>/\? for shortcuts|← for agents|manual mode on|auto mode on|\bContext\s+\d+%\s+left\b|tab to queue message/i.test(line));
+  const normalComposer=typeof read.text==='string'&&hasNormalClaudeComposer(read.text);
   return {question,collapsed:false,transitioned:!read.truncated&&!question&&normalComposer,
     truncated:read.truncated===true};
 }

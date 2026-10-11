@@ -453,6 +453,50 @@ test('old composer above a partial Claude menu does not clear retirement',async 
   assert.equal((await f.attach()).questionAwaitingTransition,true);
 });
 
+test('a boxed Claude composer with a desktop draft clears question retirement',async t=>{
+  const f=await fixture(t);
+  const first=await f.attach();
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {operationId:'claude-draft-retire-001',attachmentId:first.attachmentId,
+      questionId:first.question.id,option:0})).status,200);
+  f.state.override=`${menu()}\n────────────────────────────────\n❯\u00a0\u001b[2madd the missing mock routes\u001b[0m\n────────────────────────────────\n  [Opus 5.5] ⚠ 87% ctx\n  ⏵⏵ auto mode on · ← for agents`;
+  const settled=await f.attach();
+  assert.equal(settled.questionAwaitingTransition,false);
+  assert.equal(settled.question,undefined);
+  assert.equal(writes(f.calls).length,1);
+  f.state.override=menu();
+  assert.equal((await f.attach()).question?.prompt,'How should uploads be read?');
+});
+
+test('a draft composer above an incomplete Claude menu does not clear retirement',async t=>{
+  const f=await fixture(t);
+  const first=await f.attach();
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {operationId:'claude-draft-partial-001',attachmentId:first.attachmentId,
+      questionId:first.question.id,option:0})).status,200);
+  f.state.override='❯ Desktop draft\n────────────────────\n  ⏵⏵ auto mode on\n←  ☐ Uploads  ✔ Submit  →\n│ New question?';
+  assert.equal((await f.attach()).questionAwaitingTransition,true);
+});
+
+test('partial boxes, menu controls, and multiline drafts cannot retire a Claude question',async t=>{
+  const f=await fixture(t);
+  const first=await f.attach();
+  assert.equal((await f.request(f.first.token,`${route}/answer`,'POST',
+    {operationId:'claude-ambiguous-composer-001',attachmentId:first.attachmentId,
+      questionId:first.question.id,option:0})).status,200);
+  const border='────────────────────────────────';
+  for(const screen of [
+    `${border}\n❯ Desktop draft\n│\n  ⏵⏵ auto mode on`,
+    `${border}\n❯ 1. Keep local\n${border}\n  ⏵⏵ auto mode on`,
+    `${border}\n❯ First line\nSecond line\n${border}\n  ⏵⏵ auto mode on`,
+    `${border}\n❯ Submit\n${border}\n  ⏵⏵ auto mode on`,
+    `${border}\n❯ Desktop draft\n${border}\n  I saw auto mode on in the reply`,
+  ]) {
+    f.state.override=screen;
+    assert.equal((await f.attach()).questionAwaitingTransition,true,screen);
+  }
+});
+
 test('Claude startup trust is a full native choice card and only an explicit Trust dispatches it',async t=>{
   const f=await fixture(t,{mode:'trust'});
   assert.equal(f.pane.agent_status,'unknown');

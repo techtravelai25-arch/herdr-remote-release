@@ -85,6 +85,8 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
     val canPrompt = canInput && pane?.kind != "terminal" && !hasNativeQuestion
     val canPickModel = canInput && !hasNativeQuestion && canChangeAgentModel(state, pane) && !state.modelMenuPending
     val modelButtonEnabled = canInput && !hasNativeQuestion && supportsModelSelection(state.snapshot, pane)
+    val awaitingTerminal = state.questionPending && nativeQuestion == null && !state.questionReviewAvailable
+    val openingQuestion = paneId?.let { state.deliveries[it]?.operation } == "question.question-review"
     val needsInput = pane?.status in setOf("blocked", "needs_input", "needs-input") || hasNativeQuestion
     // File selection is local; prompt() checks the fresh pane attachment before uploading.
     val canPickFile = connected && pane != null && pane.kind != "terminal" && !state.modelMenuPending && state.agentModelMenu == null &&
@@ -167,6 +169,7 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
                 !connected -> "Connection paused"
                 !state.snapshot.canControl -> "Observer access"
                 pane == null -> "Session unavailable"
+                awaitingTerminal -> "Checking terminal"
                 needsInput -> "Waiting for your decision"
                 pane.status == "working" -> "Work in progress"
                 pane.status == "done" -> "Ready to review"
@@ -244,6 +247,7 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
                 color = if (canInput) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error) }
             Text(when {
                 transcript -> "Conversation · ${kindLabel(pane?.kind.orEmpty())}"
+                terminalQuestion && awaitingTerminal -> "Live terminal"
                 terminalQuestion -> "Live terminal question"
                 readingOutput.truncated && display.footerHidden -> "Recent output · input area hidden · earlier content unavailable"
                 readingOutput.truncated -> "Recent output · earlier content unavailable"
@@ -306,7 +310,8 @@ private data class TerminalReadingSnapshot(val text: String, val kind: String, v
                 heldOutput = null
             }) { Text(if (usingTerminalControls) "Use answer buttons" else "Use terminal controls") }
             if (hasNativeQuestion && !usingTerminalControls) TerminalQuestionCard(nativeQuestion, state.questionReviewAvailable,
-                state.questionPending, canQuestionAct, state.terminalAttachmentId,
+                state.questionPending, if (openingQuestion) "Opening question…" else "Checking terminal…",
+                canQuestionAct, state.terminalAttachmentId,
                 paneId?.let { state.deliveries[it]?.id }, state.message,
                 onReviewQuestion, onAnswerQuestion, onCancelQuestion)
             else if (needsInput) Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceContainer,

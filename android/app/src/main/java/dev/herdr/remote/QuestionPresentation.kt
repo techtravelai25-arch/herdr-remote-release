@@ -33,6 +33,22 @@ private fun hasCompleteClaudeTrustWarning(prompt: String): Boolean {
 internal fun validQuestionAnswer(text: String): Boolean = text.trim().length in 1..500 &&
     text.none { it.code < 0x20 || it.code in 0x7f..0x9f }
 
+/** Reconcile a fresh bridge observation with a locally dispatched question action. */
+internal data class QuestionObservation(val question: BridgeQuestion?, val reviewAvailable: Boolean,
+    val pending: Boolean, val dismissedQuestionStillVisible: Boolean)
+
+internal fun observeQuestion(output: Output, selectionEnabled: Boolean, attachmentChanged: Boolean,
+    menuVisible: Boolean, dismissedQuestionId: String?, localRequestActive: Boolean): QuestionObservation {
+    if (!selectionEnabled || attachmentChanged) return QuestionObservation(null, false, false, false)
+    val observed = output.question?.takeIf { it.isValid() && !menuVisible }
+    val oldQuestion = observed != null && observed.id == dismissedQuestionId
+    val question = observed?.takeUnless { oldQuestion }
+    val reviewAvailable = output.questionReviewAvailable && !menuVisible
+    val pending = output.questionAwaitingTransition || oldQuestion ||
+        (localRequestActive && question == null && reviewAvailable)
+    return QuestionObservation(question, reviewAvailable, pending, oldQuestion)
+}
+
 /** The action owns the busy flag and receipt; this is its fresh pane preflight. */
 internal fun questionPaneReady(state: RemoteState, paneId: String): Boolean =
     state.selectedId == paneId && state.online && state.snapshot.herdrOnline && !state.snapshot.stale &&

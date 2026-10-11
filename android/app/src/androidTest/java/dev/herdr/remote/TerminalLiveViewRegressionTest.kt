@@ -174,7 +174,10 @@ class TerminalLiveViewRegressionTest {
         var reviews = 0
         compose.setContent { TestTerminal(fakeState(pane, output = liveQuestion, question = question,
             questionReviewAvailable = !pending && question == null, questionPending = pending)
-            .copy(structuredHistory = savedHistory), pane, onReviewQuestion = { reviews++; pending = true }) }
+            .copy(structuredHistory = savedHistory,
+                deliveries = if (pending) mapOf(pane.id to DeliveryState("review-receipt", "delivered", "Dispatched",
+                    operation = "question.question-review")) else emptyMap()), pane,
+            onReviewQuestion = { reviews++; pending = true }) }
         compose.onNodeWithText("Live terminal question").assertExists()
         compose.onNodeWithText(liveQuestion).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Review question").performScrollTo().performClick()
@@ -427,7 +430,9 @@ Security guide"""
         var state by mutableStateOf(fakeState(pane, questionReviewAvailable = true))
         val answers = mutableListOf<Pair<Int?, String?>>()
         compose.setContent { TestTerminal(state, pane,
-            onReviewQuestion = { state = state.copy(questionReviewAvailable = false, questionPending = true) },
+            onReviewQuestion = { state = state.copy(questionReviewAvailable = false, questionPending = true,
+                deliveries = mapOf(pane.id to DeliveryState("review-receipt", "delivered", "Dispatched",
+                    operation = "question.question-review"))) },
             onAnswerQuestion = { index, text -> answers += index to text }) }
         compose.onNodeWithText("Review question").performClick()
         compose.onNodeWithText("Opening question…").assertIsNotEnabled()
@@ -466,9 +471,31 @@ Security guide"""
         compose.onNodeWithText("Question waiting in terminal").assertExists()
         compose.onNodeWithText("Next").assertDoesNotExist()
         compose.onNodeWithText("Review question").performClick()
-        compose.runOnIdle { state = state.copy(questionReviewAvailable = false, questionPending = true) }
+        compose.runOnIdle { state = state.copy(questionReviewAvailable = false, questionPending = true,
+            deliveries = mapOf(pane.id to DeliveryState("review-receipt", "delivered", "Dispatched",
+                operation = "question.question-review"))) }
         compose.onNodeWithText("Opening question…").assertIsNotEnabled()
         compose.runOnIdle { assertEquals(1, reviews); assertEquals(0, keys) }
+    }
+
+    @Test
+    fun pendingAnswerShowsTerminalCheckUntilFreshOutputSettles() {
+        val pane = Pane("claude-finished", "workspace", kind = "claude", status = "done")
+        var state by mutableStateOf(fakeState(pane, output = "* Brewed the fix. Done.", questionPending = true)
+            .copy(deliveries = mapOf(pane.id to DeliveryState("answer-receipt", "delivered", "Dispatched",
+                operation = "question.answer"))))
+        compose.setContent { TestTerminal(state, pane) }
+        compose.onNodeWithText("Checking terminal").assertExists()
+        compose.onNodeWithText("Terminal update pending").assertExists()
+        compose.onNodeWithText("Live terminal").assertExists()
+        compose.onNodeWithText("Checking terminal…").assertIsNotEnabled()
+        compose.onNodeWithText("Waiting for your decision").assertDoesNotExist()
+        compose.onNodeWithText("Live terminal question").assertDoesNotExist()
+        compose.onNodeWithText("Opening question…").assertDoesNotExist()
+        compose.runOnIdle { state = state.copy(questionPending = false) }
+        compose.onNodeWithText("Ready to review").assertExists()
+        compose.onNodeWithText("Checking terminal…").assertDoesNotExist()
+        compose.onNodeWithText("Live terminal question").assertDoesNotExist()
     }
 
     @Test

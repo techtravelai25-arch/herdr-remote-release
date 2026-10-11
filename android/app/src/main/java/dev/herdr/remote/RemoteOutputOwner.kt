@@ -68,7 +68,7 @@ internal class RemoteOutputOwner(
                     val pane = state.snapshot.panes.find { it.id == state.selectedId }
                     outputPoller.pause(listOf(state.selectedId, state.output, state.terminalAttachmentId),
                         pane?.status in setOf("working", "running", "starting", "blocked", "needs_input", "needs-input") ||
-                            pendingAction() || waitingForModelMenu(state.selectedId))
+                            pendingAction() || state.questionPending || waitingForModelMenu(state.selectedId))
                 } else delay((1000L shl failures) + Random.nextLong(1000))
             }
         }
@@ -95,27 +95,23 @@ internal class RemoteOutputOwner(
             !attachmentChanged && (waiting || before.agentModelMenu != null) }
         if (menu != null) modelMenuRequest = id to android.os.SystemClock.elapsedRealtime()
         if (menu == null && !waiting && modelMenuRequest?.first == id) modelMenuRequest = null
-        val observedQuestion = result.question?.takeIf { before.snapshot.questionSelectionEnabled && it.isValid() && !attachmentChanged && menu == null }
-        val oldQuestion = observedQuestion != null && observedQuestion.id == dismissedQuestionId
-        val question = observedQuestion?.takeUnless { oldQuestion }
-        val waitingQuestion = before.snapshot.questionSelectionEnabled && !attachmentChanged &&
-            (result.questionAwaitingTransition || oldQuestion ||
-                (waitingForQuestion(id) && question == null && result.questionReviewAvailable))
-        if (!waitingQuestion) questionRequest = null
-        if (!waitingQuestion && !oldQuestion) dismissedQuestionId = null
+        val observed = observeQuestion(result, before.snapshot.questionSelectionEnabled, attachmentChanged,
+            menu != null, dismissedQuestionId, waitingForQuestion(id))
+        if (!observed.pending) questionRequest = null
+        if (!observed.pending && !observed.dismissedQuestionStillVisible) dismissedQuestionId = null
         state.update { current ->
             if (current.selectedId != id || !current.online || !current.snapshot.herdrOnline || current.snapshot.stale ||
                 !acceptTerminalOutput(current.terminalAttachmentId, current.outputRevision, result.attachmentId, result.revision)) current
             else current.copy(output = result.text, outputReady = true, outputTruncated = result.truncated,
                 outputRevision = result.revision, outputSource = result.source, terminalAttachmentId = result.attachmentId,
-                question = question, questionReviewAvailable = current.snapshot.questionSelectionEnabled && !attachmentChanged && result.questionReviewAvailable && menu == null,
-                questionPending = waitingQuestion,
+                question = observed.question, questionReviewAvailable = observed.reviewAvailable,
+                questionPending = observed.pending,
                 currentModel = null, agentModelMenu = menu,
                 modelMenuPending = current.modelMenuPending && waiting && menu == null,
                 message = if (attachmentChanged && (current.modelMenuPending || current.agentModelMenu != null))
                     "The terminal changed. Reopen its model choices after refreshing."
                 else if (!waiting && current.modelMenuPending) "Model choices did not appear. Check the terminal before trying again."
-                else if (!waitingQuestion && current.questionPending && question == null) "The question is no longer visible. Check the terminal before trying again."
+                else if (!observed.pending && current.questionPending && observed.question == null) "The question is no longer visible. Check the terminal before trying again."
                 else current.message)
         }
     }
