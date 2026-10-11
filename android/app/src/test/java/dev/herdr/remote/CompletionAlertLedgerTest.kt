@@ -141,4 +141,18 @@ class CompletionAlertLedgerTest {
         }
     }
 
+    @Test fun completeMembershipRetiresOnlyAbsentPaneAndTombstonesDelayedShow() {
+        val newer = "push:laptop:newer"
+        val initial = CompletionAlertLedger().show(slot, "laptop", a, t).first.show(newer, "laptop", b, t).first
+        val incomplete = Snapshot(herdrOnline = true, panes = listOf(Pane("newer", "workspace")))
+        for (snapshot in listOf(incomplete, incomplete.copy(stale = true, panesComplete = true),
+            incomplete.copy(herdrOnline = false, panesComplete = true))) {
+            assertEquals(initial, initial.reconcile(snapshot, "local", "laptop", t + 1).first)
+        }
+        val (closed, cancelled) = initial.reconcile(incomplete.copy(panesComplete = true), "local", "laptop", t + 2)
+        assertEquals(listOf(slot), cancelled)
+        assertEquals(b, closed.current[newer])
+        assertFalse(closed.show(slot, "laptop", a, t + 3).second)
+    }
+
 }

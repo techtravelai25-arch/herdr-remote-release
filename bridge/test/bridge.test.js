@@ -125,7 +125,7 @@ test('observer cannot mutate sessions, prompts, answers, attachments or Herdr',a
  const [event]=await once(ws,'message');assert.equal(JSON.parse(event).data.permissionMode,'observer');ws.close();
  const routes=[['/v1/agents','POST',{}],['/v1/herdr/start','POST',{}],['/v1/panes/w1Y%3Ap1/prompt','POST',{text:'hi'}],['/v1/panes/w1Y%3Ap1/answer','POST',{}],['/v1/panes/w1Y%3Ap1/keys','POST',{keys:['enter']}],['/v1/panes/w1Y%3Ap1/restart','POST',{}],['/v1/panes/w1Y%3Ap1','DELETE'],['/v1/panes/w1Y%3Ap1/attachments','POST',{}]];
  for(const [route,method,body] of routes){const r=await f.request(route,method,body);assert.equal(r.status,403,route);assert.equal((await r.json()).error.code,'permission_denied');}
- assert.equal(f.calls.filter(c=>c.method!=='session.snapshot').length,0);
+ assert.equal(f.calls.filter(c=>!['session.snapshot','pane.process_info'].includes(c.method)).length,0);
 });
 test('terminal input needs per-device grant and local enablement',async t=>{
  const f=await fixture(t,{allowTerminalInput:true});f.p.agent=null;
@@ -203,7 +203,7 @@ test('account grants authenticate HTTP and WebSocket without creating a paired c
  const [message]=await once(ws,'message');assert.equal(JSON.parse(message).type,'snapshot');
  const closed=once(ws,'close');ws.close();await closed;
  assert.equal(f.app.store.read('devices.json',[]).length,1);
- assert.ok(f.calls.every(call=>call.method==='session.snapshot'));
+ assert.ok(f.calls.every(call=>['session.snapshot','pane.process_info'].includes(call.method)));
  // A laptop owner can deliberately restore control to a verified legacy
  // account without making every account grant (or a new email) writable.
  f.app.store.write('access.json',{enabled:true,devices:{},accounts:{'owner@example.com':'normal'}});
@@ -269,7 +269,7 @@ test('an existing phone connection observes Herdr recovery and controls the repl
  const recovered=await nextSnapshot(data=>data.herdrOnline);
  assert.equal(recovered.stale,false);
  assert.deepEqual(recovered.panes.map(p=>p.id),['w1Y:p2']);
- assert.ok(f.calls.every(call=>call.method==='session.snapshot'),'Recovery must never replay input');
+ assert.ok(f.calls.every(call=>['session.snapshot','pane.process_info'].includes(call.method)),'Recovery must never replay input');
  assert.equal((await f.request('/v1/panes/w1Y%3Ap1/output')).status,409);
  assert.equal((await f.request('/v1/panes/w1Y%3Ap2/output')).status,200);
  assert.equal((await f.request('/v1/panes/w1Y%3Ap2/keys','POST',{keys:['esc']})).status,200);
@@ -374,7 +374,7 @@ test('WebSocket requires auth and reconnect sends fresh snapshot without control
  const f=await fixture(t);
  const bad=new WebSocket(f.url.replace('http','ws')+'/v1/events');bad.on('error',()=>{});const [response]=await once(bad,'unexpected-response').then(([req,res])=>[res]);assert.equal(response.statusCode,401);response.resume();bad.terminate();
  for(let i=0;i<2;i++){const ws=new WebSocket(f.url.replace('http','ws')+'/v1/events',{headers:{Authorization:`Bearer ${f.credential.token}`}});const [msg]=await once(ws,'message');assert.equal(JSON.parse(msg).type,'snapshot');const closed=once(ws,'close');ws.close();await closed;}
- assert.ok(f.calls.every(c=>c.method==='session.snapshot'));
+ assert.ok(f.calls.every(c=>['session.snapshot','pane.process_info'].includes(c.method)));
 });
 test('NDJSON transport handles fragmented responses and matches request id',async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-socket-'));const socketPath=path.join(dir,'api.sock');

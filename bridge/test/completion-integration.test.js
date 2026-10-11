@@ -16,7 +16,7 @@ async function desktopFixture(t,ids=['p1']) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bridge-desktop-ack-'));
   const statuses=new Map(ids.map(id=>[id,'idle']));let hooks;let submission;
   const rawPane=id=>({
-    pane_id:id,terminal_id:`terminal-${id}`,workspace_id:'w1',tab_id:`tab-${id}`,cwd:'/tmp',revision:1,agent:'codex',agent_status:statuses.get(id)
+    pane_id:id,terminal_id:`terminal-${id}`,workspace_id:'w1',tab_id:`tab-${id}`,cwd:'/tmp',revision:1,agent:'opencode',agent_status:statuses.get(id)
   });
   const raw=()=>({snapshot:{protocol:22,workspaces:[{workspace_id:'w1'}],panes:ids.map(rawPane),agents:[]}});
   let provider=raw;

@@ -19,6 +19,8 @@ import {createHistory} from './history.js';
 import {Timeline} from './timeline.js';
 import {PaneActivity} from './pane-activity.js';
 import {CodexStatus} from './codex-status.js';
+import {ClaudeStatus} from './claude-status.js';
+import {withClaudeSession} from './claude-session.js';
 import {associatedProject as projectFor} from './projects.js';
 import {createPaneMenus} from './pane-menus.js';
 import {createLauncher} from './agent-launch.js';
@@ -44,6 +46,12 @@ export function createBridge(config, dependencies={}) {
     :{homeDirectory:config.homeDirectory});
   const activity=new PaneActivity(store); const paneAttachments=new PaneAttachments(); const locks=new Set();
   const codexStatus=new CodexStatus(dependencies.herdr&&!dependencies.homeDirectory?null:config.homeDirectory);
+  const claudeStatus=new ClaudeStatus({herdr,home:dependencies.herdr&&!dependencies.homeDirectory?null:config.homeDirectory,
+    now:dependencies.statusNow??Date.now});
+  const agentStatus=(id,status)=>{
+    const normalized=claudeStatus.status(id,codexStatus.status(id,status));
+    return {status:normalized,...codexStatus.metadata(id),...claudeStatus.metadata(id)};
+  };
   const htmlPreview=createHtmlPreview({config,bridgePort:()=>server.address()?.port||config.port||0,
     fetchImpl:dependencies.previewFetch||fetch});
   const menus=createPaneMenus({herdr,store});
@@ -71,7 +79,12 @@ export function createBridge(config, dependencies={}) {
     const project=associatedProject(cwd);
     const title=p.label||agents.get(p.pane_id)?.name||p.title||p.terminal_title_stripped||p.agent||'Terminal';
     return {projectId:project?.id??null,projectLabel:project?.label??null,id:p.pane_id,workspaceId:p.workspace_id,tabId:p.tab_id,
-      title,cwd,kind:p.agent||'terminal',status:p.agent_status||'unknown',lastActivity,revision:p.revision||0};
+      title,cwd,kind:p.agent||'terminal',status:p.agent_status||'unknown',lastActivity,revision:p.revision||0,
+      bindingGeneration:p.bindingGeneration??p.binding?.generation??null,
+      bindingVerification:p.bindingVerification??(p.binding?.state==='conflict'?'conflicting':p.binding?.state??null),
+      bindingReason:p.binding?.reason??null,nativeTurnId:p.nativeTurnId??null,
+      completionEligible:p.completionEligible===true,nativeCompletionKind:p.nativeCompletionKind??null,
+      nativeReason:p.nativeReason??null,rawStatus:p.rawStatus??p.agent_status??'unknown'};
   }
   async function snapshot() {
     if(snapshotFlight) return snapshotFlight;
@@ -87,21 +100,29 @@ export function createBridge(config, dependencies={}) {
         const agents=new Map((raw.agents||[]).map(a=>[a.pane_id,a]));
         const newer=new Set([...statusOverrides].filter(([,event])=>event.sequence>snapshotStartedAtSequence).map(([id])=>id));
         for(const id of inputDuringFlight)newer.add(id);
-        const panes=await codexStatus.observe(raw.panes,raw.focused_pane_id);
+        const bound=await Promise.all(raw.panes.map(p=>withClaudeSession(herdr,p,config.homeDirectory)));
+        const panes=await claudeStatus.observe(await codexStatus.observe(bound,raw.focused_pane_id),raw.focused_pane_id,pane=>{
+          const event=statusOverrides.get(pane.pane_id);
+          return event&&event.sequence>snapshotStartedAtSequence?{status:event.status,focused:false}
+            :{status:pane.agent_status,focused:pane.pane_id===raw.focused_pane_id};
+        });
         activity.observe(panes,newer);
         paneAttachments.prune(live);
         menus.prune(live);
         const workspaces=raw.workspaces.map(w=>({id:w.workspace_id,label:w.label||w.workspace_id}));
-        const result={...base,herdrOnline:true,lastUpdatedAt:new Date().toISOString(),workspaces,panes:panes.map(p=>snapshotPane(p,agents))};
+        const result={...base,herdrOnline:true,panesComplete:true,lastUpdatedAt:new Date().toISOString(),workspaces,panes:panes.map(p=>snapshotPane(p,agents))};
         // Keep even an empty successful result: a real empty snapshot must
         // clear an older session list rather than resurrecting it on outage.
-        lastGoodSnapshot=result;
+        // A native event received after this RPC began is reconciled against
+        // a new read before its result can become an outage fallback.
+        if(!raw.panes.some(p=>['codex','claude'].includes(p.agent)&&
+          (statusOverrides.get(p.pane_id)?.sequence??0)>snapshotStartedAtSequence))lastGoodSnapshot=result;
         return result;
       } catch(e) {
         const error=e instanceof BridgeError?e.message:'Unable to read Herdr.';
         const canStartHerdr=base.canStartHerdr && e.code==='herdr_offline';
-        if(lastGoodSnapshot) return {...lastGoodSnapshot,usage:base.usage,herdrOnline:false,canStartHerdr,stale:true,error};
-        return {...base,canStartHerdr,herdrOnline:false,workspaces:[],panes:[],error};
+        if(lastGoodSnapshot) return {...lastGoodSnapshot,usage:base.usage,herdrOnline:false,panesComplete:false,canStartHerdr,stale:true,error};
+        return {...base,canStartHerdr,herdrOnline:false,panesComplete:false,workspaces:[],panes:[],error};
       }
     })();
     try{return await snapshotFlight;} finally {snapshotFlight=null;snapshotInputDuringFlight=null;}
@@ -130,11 +151,15 @@ export function createBridge(config, dependencies={}) {
   }
   const rate=createRateLimiter();
   let last=''; let polling=false;let latestSnapshot=null;
+  let publicationErrorCount=0;
   let publication=Promise.resolve();
+  let nativePublication=Promise.resolve();
   const ctx={config,dependencies,store,herdr,history,timeline,directories,attachments,operations,push,htmlPreview,menus,
     paneAttachments,launcher,locks,loadUpdate,snapshot,pane,locked,auth,rate,scopedSnapshot,acceptedInput,associatedProject,
-    inputStarted:(pane,startedAt,onlyIfComplete)=>codexStatus.inputStarted(pane,startedAt,onlyIfComplete),
-    refreshPublished:()=>refreshPublished(),publish:data=>publish(data),latest:()=>latestSnapshot};
+    inputStarted:(pane,startedAt,onlyIfComplete)=>pane.agent==='claude'
+      ?claudeStatus.inputStarted(pane,startedAt,onlyIfComplete):codexStatus.inputStarted(pane,startedAt,onlyIfComplete),
+    refreshPublished:()=>refreshPublished(),publish:data=>publish(data),latest:()=>latestSnapshot,
+    diagnostics:()=>({publicationErrorCount,push:push.diagnostics?.()??null})};
   ctx.paneRoutes=createPaneRoutes(ctx);
   const server=http.createServer(createRequestHandler(ctx));
   server.requestTimeout=300000; server.headersTimeout=10000; server.maxHeadersCount=30;
@@ -142,7 +167,8 @@ export function createBridge(config, dependencies={}) {
     authorizeUpgrade:async req=>{const {token,device}=await auth(req);rate(device.deviceId,240);return token;},
     onConnection:()=>{void refreshPublished(true).catch(()=>{});}});
   function publish(data,force=false) {
-    try{const observed=push.observe(data);if(Array.isArray(observed?.panes))data=observed;}catch{}
+    try{const observed=push.observe(data);if(Array.isArray(observed?.panes))data=observed;}
+    catch{publicationErrorCount++;data={...data,publicationError:'push_annotation_failed'};}
     latestSnapshot=data;
     try{timeline?.observe(data);}catch{}
     if(typeof dependencies.onSnapshot==='function')Promise.resolve().then(()=>dependencies.onSnapshot(data)).catch(()=>{});
@@ -158,8 +184,16 @@ export function createBridge(config, dependencies={}) {
     // A shared RPC may have started before this reconciliation call.
     const before=snapshotFlight?snapshotStartedAtSequence:statusSequence;
     let data=await snapshot();
+    // A native status event that arrived during this RPC needs a new binding
+    // read. Do not merge it with the older conversation captured by the RPC.
+    if(data.herdrOnline&&data.panes.some(p=>['codex','claude'].includes(p.kind)&&
+      (statusOverrides.get(p.id)?.sequence??0)>before)) {
+      await nativePublication;
+      return latestSnapshot;
+    }
     // An event arriving during an RPC must not be overwritten by its older snapshot.
-    if(data.herdrOnline)data={...data,panes:data.panes.map(p=>{const event=statusOverrides.get(p.id);return event&&event.sequence>before?{...p,status:codexStatus.status(p.id,event.status)}:p;})};
+    if(data.herdrOnline)data={...data,panes:data.panes.map(p=>{const event=statusOverrides.get(p.id);
+      return event&&event.sequence>before?{...p,...agentStatus(p.id,event.status)}:p;})};
     if(data.herdrOnline) lastGoodSnapshot=data;
     const live=new Set(data.panes.map(p=>p.id));
     for(const id of statusOverrides.keys())if(!live.has(id))statusOverrides.delete(id);
@@ -171,11 +205,39 @@ export function createBridge(config, dependencies={}) {
   const statusEvents=dependencies.herdr&&!dependencies.statusEventsFactory?null:(dependencies.statusEventsFactory??createStatusEvents)(config.socketPath,{
     onReady:()=>refreshPublished(),
     onStatus:event=>{
-      if(!latestSnapshot?.herdrOnline||!latestSnapshot.panes.some(p=>p.id===event.pane_id))return;
-      statusOverrides.set(event.pane_id,{sequence:++statusSequence,status:event.agent_status});
-      const status=codexStatus.status(event.pane_id,event.agent_status);
-      const lastActivity=activity.status(event.pane_id,status);
-      const updated={...latestSnapshot,panes:latestSnapshot.panes.map(p=>p.id===event.pane_id?{...p,status,lastActivity}:p)};
+      const pane=latestSnapshot?.panes.find(p=>p.id===event.pane_id);
+      if(!latestSnapshot?.herdrOnline||!pane)return;
+      const sequence=++statusSequence;
+      statusOverrides.set(event.pane_id,{sequence,status:event.agent_status});
+      if(pane.kind==='codex'||pane.kind==='claude') {
+        const earlierFlight=snapshotFlight;
+        nativePublication=nativePublication.catch(()=>{}).then(async()=>{
+          if(earlierFlight)await earlierFlight;
+          if(statusOverrides.get(event.pane_id)?.sequence!==sequence)return;
+          const data=await snapshot();
+          if(!data.herdrOnline)return;
+          if(statusOverrides.get(event.pane_id)?.sequence!==sequence)return;
+          const current=data.panes.find(p=>p.id===event.pane_id);
+          if(!current) {
+            statusOverrides.delete(event.pane_id);
+            lastGoodSnapshot=data;
+            await publish(data);
+            statusEvents?.update(data.panes.filter(p=>p.kind!=='terminal'));
+            return;
+          }
+          const decision=agentStatus(event.pane_id,event.agent_status);
+          const lastActivity=activity.status(event.pane_id,decision.status);
+          const updated={...data,panes:data.panes.map(p=>p.id===event.pane_id?{...p,...decision,lastActivity}:p)};
+          lastGoodSnapshot=updated;
+          await publish(updated);
+          statusEvents?.update(updated.panes.filter(p=>p.kind!=='terminal'));
+          return latestSnapshot;
+        });
+        return nativePublication;
+      }
+      const decision=agentStatus(event.pane_id,event.agent_status);
+      const lastActivity=activity.status(event.pane_id,decision.status);
+      const updated={...latestSnapshot,panesComplete:false,panes:latestSnapshot.panes.map(p=>p.id===event.pane_id?{...p,...decision,lastActivity}:p)};
       // Events are authoritative too. Keep the outage fallback from reverting
       // a status that arrived after the last session.snapshot RPC.
       lastGoodSnapshot=updated;

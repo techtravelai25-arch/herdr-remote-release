@@ -34,7 +34,11 @@ export function createRequestHandler(ctx) {
       const checkedAt=new Date().toISOString(); const s=await ctx.snapshot();
       return respond(res,200,{bridgeOnline:true,herdrOnline:s.herdrOnline,hostname:s.hostname,process:{uptimeSeconds:Math.floor(process.uptime())},
         projects:config.projects.map(project=>({id:project.id,label:project.label,available:projectAvailable(project)})),
-        websocketSupported:true,sessionResumeSupported:false,checkedAt,error:s.error||null});
+        websocketSupported:true,sessionResumeSupported:false,checkedAt,error:s.error||null,
+        publication:ctx.diagnostics(),nativeDecisions:s.panes.map(p=>({paneId:p.id,bindingGeneration:p.bindingGeneration,
+          bindingVerification:p.bindingVerification,bindingReason:p.bindingReason,rawStatus:p.rawStatus,status:p.status,
+          nativeTurnId:p.nativeTurnId,nativeCompletionKind:p.nativeCompletionKind,nativeReason:p.nativeReason,
+          completionEligible:p.completionEligible}))});
     }
     if(req.method==='GET'&&url.pathname==='/v1/attachments') return respond(res,200,attachments.list(device.deviceId));
     const attachmentContent=url.pathname.match(/^\/v1\/attachments\/([^/]+)\/content$/);

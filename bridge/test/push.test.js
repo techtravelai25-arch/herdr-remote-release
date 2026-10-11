@@ -36,7 +36,7 @@ test('relay-backed push uses its private laptop identity at the transport bounda
   assert.equal(calls[0].url,'https://selfhost.example/v1/push/events');
   assert.equal(calls[0].options.headers.Authorization,`Bearer ${identity.relayToken}`);
   assert.equal(calls[0].options.headers['X-Herdr-Laptop-ID'],identity.id);
-  assert.deepEqual(Object.keys(JSON.parse(calls[0].options.body)).sort(),['createdAt','eventId','kind','paneId']);
+  assert.deepEqual(Object.keys(JSON.parse(calls[0].options.body)).sort(),['createdAt','eventId','expiresAt','kind','paneId']);
   assert.equal(JSON.parse(calls[0].options.body).kind,'done');
   assert.doesNotMatch(JSON.stringify(s.config)+JSON.stringify(s.store.read('push-outbox.json')),/rrrrrrrrrrrr/);
 });
@@ -78,7 +78,7 @@ test('relay-backed push rejects missing, exposed or invalid identity before tran
 test('monitor emits only transitions, preserves working across unknown and excludes terminal content',async t=>{
   const calls=[];const s=setup(t,async(url,options)=>{calls.push({url,options,body:JSON.parse(options.body)});return {ok:true};});const m=s.make();
   s.observe(m,'working');s.observe(m,'unknown');s.observe(m,'done',{text:'secret output',title:'secret title'});await tick();
-  s.observe(m,'done');await tick();assert.equal(calls.length,1);assert.equal(calls[0].body.kind,'done');assert.deepEqual(Object.keys(calls[0].body).sort(),['createdAt','eventId','kind','paneId']);assert.equal(calls[0].options.redirect,'error');
+  s.observe(m,'done');await tick();assert.equal(calls.length,1);assert.equal(calls[0].body.kind,'done');assert.deepEqual(Object.keys(calls[0].body).sort(),['createdAt','eventId','expiresAt','kind','paneId']);assert.equal(calls[0].options.redirect,'error');
   s.observe(m,'blocked');await tick();assert.equal(calls.at(-1).body.kind,'needs_input');
   s.observe(m,'error');await tick();assert.equal(calls.at(-1).body.kind,'error');
   s.observe(m,'working',{kind:'terminal'});s.observe(m,'idle',{kind:'terminal'});await tick();assert.equal(calls.length,4);
@@ -164,7 +164,7 @@ test('attention clear retries from the durable outbox and a captured acknowledge
   m.close();m=s.make();const b=s.observe(m,'error').panes[0].attentionEventId;
   assert.equal(m.acknowledgeAttention('w1:p1',a),false);assert.equal(m.attentionFor('w1:p1'),b);
   await tick();online=true;s.advance(60000);await m.flush();
-  assert.deepEqual(sent.slice(-3).map(e=>[e.kind,e.targetEventId]),[['needs_input',undefined],['clear',a],['error',undefined]]);
+  assert.deepEqual(sent.slice(-2).map(e=>[e.kind,e.targetEventId]),[['clear',a],['error',undefined]]);
   assert.equal(s.store.read('push-outbox.json').queue.length,0);
 });
 
@@ -233,9 +233,9 @@ test('offline clears retry from the durable outbox without losing acknowledgemen
   let online=false;const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:online};});let m=s.make();
   s.observe(m,'working');s.observe(m,'done');await tick();const id=m.completionFor('w1:p1');
   assert.equal(m.acknowledge('w1:p1',id),true);m.close();
-  const saved=s.store.read('push-outbox.json');assert.equal(saved.queue.length,2);assert.equal(saved.states['w1:p1'].completionAcknowledged,true);
+  const saved=s.store.read('push-outbox.json');assert.equal(saved.queue.length,1);assert.equal(saved.queue[0].kind,'clear');assert.equal(saved.states['w1:p1'].completionAcknowledged,true);
   online=true;s.advance(60000);m=s.make();await m.flush();
-  assert.deepEqual(sent.slice(-2).map(e=>e.kind),['done','clear']);assert.equal(sent.at(-1).targetEventId,id);
+  assert.equal(sent.at(-1).kind,'clear');assert.equal(sent.at(-1).targetEventId,id);
   assert.equal(s.store.read('push-outbox.json').queue.length,0);
 });
 
@@ -290,7 +290,7 @@ test('stale and offline snapshots cannot acknowledge or discard a pending comple
     m.observe({herdrOnline:true,panes:[],...extra});
     assert.equal(m.completionFor('w1:p1'),id);
   }
-  m.observe({herdrOnline:true,panes:[]});
+  m.observe({herdrOnline:true,panesComplete:true,panes:[]});
   assert.equal(m.completionFor('w1:p1'),null);
 });
 
@@ -304,9 +304,9 @@ test('outbox trimming during delivery does not discard a different queued event'
   const m=s.make();s.observe(m,'working');s.observe(m,'done');
   for(let i=0;i<70;i++) {s.observe(m,'working');s.observe(m,'done');}
   const queued=s.store.read('push-outbox.json').queue.map(e=>e.eventId);
-  assert.equal(queued.length,128);assert.ok(!queued.includes(sent[0].eventId));
+  assert.equal(queued.length,71);assert.ok(!queued.includes(sent[0].eventId));
   release();await tick();
-  assert.deepEqual(sent.slice(1).map(e=>e.eventId),queued);
+  assert.deepEqual(sent.slice(1).map(e=>e.eventId),queued.filter(id=>id!==sent[0].eventId));
   assert.equal(s.store.read('push-outbox.json').queue.length,0);
 });
 
@@ -328,4 +328,125 @@ test('snapshots with many long-lived panes stay within the relay response budget
     assert.deepEqual(pane.acknowledgedAttentionEventIds,[...state.acknowledgedAttentionEventIds,state.attentionEventId].slice(-HISTORY_LIMIT));
   }
   assert.ok(Buffer.byteLength(JSON.stringify(snapshot))<MAX_BRIDGE_RESPONSE_BYTES/2);
+});
+
+test('rebind to historically done conversation baselines; one verified native turn survives restart and replay',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});
+  let m=s.make();
+  const pane=(generation,status,turn,eligible=false)=>({id:'w1:p1',kind:'codex',status,bindingGeneration:generation,bindingVerification:'verified',nativeTurnId:turn,completionEligible:eligible});
+  const publish=p=>m.observe({herdrOnline:true,panesComplete:true,panes:[p]});
+  publish(pane('A','working','a-turn'));
+  publish(pane('B','done','historical-b',true));await tick();
+  assert.equal(sent.length,0);
+  publish(pane('B','working','new-b'));
+  const first=publish(pane('B','done','new-b',true)).panes[0].completionEventId;await tick();
+  assert.ok(first);assert.deepEqual(sent.map(e=>e.kind),['done']);
+  m.close();m=s.make();
+  assert.equal(publish(pane('B','done','new-b',true)).panes[0].completionEventId,first);
+  publish(pane('B','working','new-b'));
+  assert.equal(publish(pane('B','done','new-b',true)).panes[0].completionEventId,first);
+  await tick();assert.equal(sent.filter(e=>e.kind==='done').length,1);
+});
+
+test('verified completion evidence is required even after working',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});const m=s.make();
+  const pane=(status,verification,eligible)=>({id:'w1:p1',kind:'codex',status,bindingGeneration:'G',bindingVerification:verification,nativeTurnId:'turn',completionEligible:eligible});
+  const publish=p=>m.observe({herdrOnline:true,panesComplete:true,panes:[p]});
+  publish(pane('working','verified',false));
+  assert.equal(publish(pane('done','unverified',true)).panes[0].completionEventId,null);
+  assert.equal(publish(pane('done','verified',false)).panes[0].completionEventId,null);
+  assert.ok(publish(pane('done','verified',true)).panes[0].completionEventId);
+  await tick();assert.equal(sent.filter(e=>e.kind==='done').length,1);
+});
+
+test('an older native turn replayed after a newer completion keeps its original logical event',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});let m=s.make();
+  const pane=(status,turn)=>({id:'w1:p1',kind:'codex',status,bindingGeneration:'G',bindingVerification:'verified',nativeTurnId:turn,completionEligible:status==='done'});
+  const publish=(status,turn)=>m.observe({herdrOnline:true,panesComplete:true,panes:[pane(status,turn)]}).panes[0];
+  publish('working','a');const a=publish('done','a').completionEventId;
+  publish('working','b');const b=publish('done','b').completionEventId;await tick();
+  assert.notEqual(a,b);
+  m.close();m=s.make();publish('working','a');publish('done','a');await tick();
+  assert.deepEqual(sent.filter(e=>e.kind==='done').map(e=>e.eventId),[a,b]);
+});
+
+test('more than 128 completions in other panes do not evict this pane\'s completed turn',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:true};});let m=s.make();
+  const pane=(id,status,turn)=>({id,kind:'codex',status,bindingGeneration:'G',bindingVerification:'verified',
+    nativeTurnId:turn,completionEligible:status==='done'});
+  const primary=(status)=>pane('w1:primary',status,'original-turn');
+  const others=(status)=>Array.from({length:140},(_,i)=>pane(`w1:other-${i}`,status,`other-turn-${i}`));
+  const publish=panes=>m.observe({herdrOnline:true,panesComplete:true,panes});
+  publish([primary('working')]);
+  const original=publish([primary('done')]).panes[0].completionEventId;
+  publish([primary('done'),...others('working')]);
+  publish([primary('done'),...others('done')]);
+  assert.deepEqual(s.store.read('push-outbox.json').states['w1:primary'].completedTurnKeys,['["G","original-turn"]']);
+  m.close();m=s.make();
+  publish([primary('working'),...others('done')]);
+  const replay=publish([primary('done'),...others('done')]).panes[0];
+  await tick();
+  assert.equal(replay.completionEventId,original);
+  assert.equal(sent.filter(e=>e.paneId==='w1:primary'&&e.kind==='done').length,1);
+});
+
+test('complete pane closure retains exact pending clear across backlog and restart',async t=>{
+  const sent=[];let online=true;const s=setup(t,async(_url,options)=>{const e=JSON.parse(options.body);sent.push(e);return {ok:online};});let m=s.make();
+  const pane=(id,status,turn,eligible=false)=>({id,kind:'codex',status,bindingGeneration:'G',bindingVerification:'verified',nativeTurnId:turn,completionEligible:eligible});
+  const publish=panes=>m.observe({herdrOnline:true,panesComplete:true,panes});
+  publish([pane('w1:p1','working','turn')]);
+  const id=publish([pane('w1:p1','done','turn',true)]).panes[0].completionEventId;await tick();
+  assert.equal(sent.at(-1).kind,'done');online=false;
+  const crowded=Array.from({length:150},(_,i)=>pane(`w1:p${i+2}`,'working',`t${i}`));
+  publish([pane('w1:p1','done','turn',true),...crowded]);
+  publish([pane('w1:p1','done','turn',true),...crowded.map(p=>({...p,status:'blocked'}))]);
+  assert.ok(m.diagnostics().droppedShows>0);
+  m.observe({herdrOnline:true,stale:true,panesComplete:true,panes:[]});
+  m.observe({herdrOnline:true,panesComplete:false,panes:[]});
+  assert.equal(m.completionFor('w1:p1'),id);
+  publish([]);assert.equal(m.completionFor('w1:p1'),null);
+  assert.ok(s.store.read('push-outbox.json').queue.some(e=>e.kind==='clear'&&e.targetEventId===id));
+  m.close();m=s.make();online=true;s.advance(60000);await m.flush();
+  assert.ok(sent.some(e=>e.kind==='clear'&&e.targetEventId===id));
+});
+
+test('network recovery after closure sends an exact clear without posting stale queued show',async t=>{
+  let online=false;const sent=[];const s=setup(t,async(_url,options)=>{const e=JSON.parse(options.body);sent.push(e);return {ok:online};});let m=s.make();
+  const pane=status=>({id:'w1:p1',kind:'codex',status,bindingGeneration:'G',bindingVerification:'verified',nativeTurnId:'turn',completionEligible:status==='done'});
+  const publish=panes=>m.observe({herdrOnline:true,panesComplete:true,panes});
+  publish([pane('working')]);
+  const id=publish([pane('done')]).panes[0].completionEventId;await tick();
+  assert.equal(sent.length,1);
+  publish([]);
+  const pending=s.store.read('push-outbox.json').queue;
+  assert.deepEqual(pending.map(e=>[e.kind,e.targetEventId]),[['clear',id]]);
+  m.close();m=s.make();online=true;s.advance(60000);await m.flush();
+  assert.deepEqual(sent.slice(1).map(e=>[e.kind,e.targetEventId]),[['clear',id]]);
+});
+
+test('queue diagnostics stay bounded and omit terminal content while retries survive restart',async t=>{
+  const s=setup(t,async()=>({ok:false}));let m=s.make();
+  m.observe({herdrOnline:true,panesComplete:true,panes:[{id:'w1:p1',kind:'codex',status:'working',
+    bindingGeneration:'G',bindingVerification:'verified',nativeTurnId:'turn',text:'private output',title:'private title'}]});
+  m.observe({herdrOnline:true,panesComplete:true,panes:[{id:'w1:p1',kind:'codex',status:'done',
+    bindingGeneration:'G',bindingVerification:'verified',nativeTurnId:'turn',completionEligible:true,text:'private output',title:'private title'}]});
+  await tick();
+  const health=m.diagnostics();
+  assert.equal(health.queueDepth,1);assert.ok(health.retries>0);
+  assert.ok(health.decisions.length<=32);
+  assert.doesNotMatch(JSON.stringify(health),/private output|private title|nativeTurnId|"G"/);
+  m.close();m=s.make();assert.equal(m.diagnostics().retries,health.retries);
+});
+
+test('long-lived exact clear refreshes transport time but retires after the phone tombstone horizon',async t=>{
+  const sent=[];const s=setup(t,async(_url,options)=>{sent.push(JSON.parse(options.body));return {ok:false};});let m=s.make();
+  s.observe(m,'working');s.observe(m,'done');await tick();const id=m.completionFor('w1:p1');
+  m.acknowledge('w1:p1',id);m.close();
+  s.advance(25*60*60*1000);m=s.make();await m.flush();
+  assert.equal(sent.at(-1).kind,'clear');assert.equal(sent.at(-1).targetEventId,id);
+  assert.equal(sent.at(-1).createdAt,Math.floor(s.now()/1000));
+  assert.ok(s.store.read('push-outbox.json').queue.some(e=>e.kind==='clear'));
+  m.close();s.advance(48*60*60*1000);m=s.make();await m.flush();
+  assert.equal(s.store.read('push-outbox.json').queue.length,0);
+  assert.equal(m.diagnostics().retiredClears,1);
 });

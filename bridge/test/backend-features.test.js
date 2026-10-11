@@ -11,14 +11,14 @@ import {Store} from '../src/store.js';
 import {BridgeError} from '../src/herdr.js';
 import {reviewProject} from '../src/review.js';
 
-async function fixture(t, {herdr:override,statusEventsFactory}={}) {
+async function fixture(t, {herdr:override,statusEventsFactory,push}={}) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-backend-')); const calls=[];
   const pane={pane_id:'w1:p1',terminal_id:'terminal-1',workspace_id:'w1',tab_id:'t1',cwd:dir,revision:1,agent_status:'working',agent:'codex',name:'agent'};
   const herdr=override||{call:async(method,params)=>{calls.push({method,params});
     if(method==='session.snapshot')return {snapshot:{protocol:22,workspaces:[{workspace_id:'w1',label:'Project'}],panes:[pane],agents:[pane]}};
     if(method==='pane.get')return {pane}; if(method==='pane.read')return {read:{text:'ok',revision:1,truncated:false}}; return {type:'ok'};
   }};
-  const app=createBridge({socketPath:'/unused',stateDir:path.join(dir,'state'),projects:[{id:'project',label:'Project',path:dir}],allowTerminalInput:true},{herdr,statusEventsFactory});
+  const app=createBridge({socketPath:'/unused',stateDir:path.join(dir,'state'),projects:[{id:'project',label:'Project',path:dir}],allowTerminalInput:true},{herdr,statusEventsFactory,push});
   app.server.listen(0,'127.0.0.1'); await once(app.server,'listening'); const url=`http://127.0.0.1:${app.server.address().port}`;
   const credential=app.store.pair(app.store.pairCode(),'phone');
   const request=(route,method='GET',body,token=credential.token,headers={})=>fetch(url+route,{method,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...headers},...(body===undefined?{}:{body:JSON.stringify(body)})});
@@ -62,8 +62,20 @@ test('attachment listing and deletion refuse symlinked file paths without touchi
 
 test('diagnostics and review are authenticated and review is read only',async t=>{
   const f=await fixture(t); execFileSync('git',['init','-q'],{cwd:f.dir}); const diagnostics=await (await f.request('/v1/diagnostics')).json(); assert.equal(diagnostics.bridgeOnline,true); assert.equal(diagnostics.sessionResumeSupported,false);
+  assert.equal(diagnostics.nativeDecisions[0].bindingVerification,'unverified');
+  assert.equal(diagnostics.nativeDecisions[0].status,'working');
+  assert.ok(Number.isInteger(diagnostics.publication.publicationErrorCount));
+  assert.ok(Number.isInteger(diagnostics.publication.push.queueDepth));
   const review=await (await f.request('/v1/panes/w1%3Ap1/review')).json(); assert.equal(review.available,true); assert.equal(review.tests.status,'unknown'); assert.ok(typeof review.status==='string');
   assert.equal((await f.request('/v1/diagnostics','GET',undefined,'bad')).status,401);
+});
+test('push publication failure appears as a content-free diagnostic',async t=>{
+  const f=await fixture(t,{push:{enabled:false,tracking:true,observe(){throw Error('private transport detail');},close(){}}});
+  const snapshot=await(await f.request('/v1/snapshot')).json();
+  assert.equal(snapshot.publicationError,'push_annotation_failed');
+  const diagnostics=await(await f.request('/v1/diagnostics')).json();
+  assert.equal(diagnostics.publication.publicationErrorCount,1);
+  assert.equal(JSON.stringify(diagnostics).includes('private transport detail'),false);
 });
 
 test('timeout after mutation is uncertain, returns receipt ID and is never executed twice',async t=>{
@@ -208,6 +220,7 @@ test('observed status event dates the pane and retains that time across a bridge
     onStatus=handlers.onStatus;
     return {update:()=>{},close:()=>{}};
   }});
+  f.pane.agent='opencode';
   assert.equal((await(await f.request('/v1/snapshot')).json()).panes[0].lastActivity,null);
   f.pane.agent_status='done';
   await onStatus({pane_id:f.pane.pane_id,agent_status:'done'});

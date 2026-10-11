@@ -54,7 +54,7 @@ test('workerd routes registered-PC push through real D1 claims without legacy cr
     assert.equal((await call('/v1/push/events','POST',relayToken,event,{'X-Herdr-Laptop-ID':'current-pc'})).status,200);
   const sends=(await db.prepare('SELECT token,event FROM synthetic_sends').all()).results;
   assert.deepEqual(sends.map(({token,event})=>({token,event:JSON.parse(event)})),[{token:'synthetic-current-fcm-token',event:{
-    eventId:event.eventId,paneId:event.paneId,kind:'done',deviceId:'current-pc',
+    eventId:event.eventId,paneId:event.paneId,kind:'done',deviceId:'current-pc',createdAt:event.createdAt,expiresAt:event.createdAt+600,
   }}]);
   assert.equal((await db.prepare('SELECT sent FROM push_deliveries WHERE device_id=? AND event_id=?')
     .bind('current-pc',event.eventId).first()).sent,1);

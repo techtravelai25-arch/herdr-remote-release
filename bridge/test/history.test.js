@@ -13,7 +13,8 @@ function fixture(t,source='claude') {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-history-'));
   const root=path.join(home,'transcripts');fs.mkdirSync(root);
   const config={homeDirectory:home,historyRoots:{[source]:root},projects:[],stateDir:path.join(home,'state')};
-  const pane={pane_id:'w:p',agent:source,agent_session:{kind:'id',value:sessionId,agent:source}};
+  const pane={pane_id:'w:p',terminal_id:'terminal-history',cwd:home,foreground_cwd:home,
+    agent:source,agent_session:{kind:'id',value:sessionId,agent:source}};
   const file=path.join(root,source==='codex'?`rollout-2026-09-22-${sessionId}.jsonl`:`${sessionId}.jsonl`);
   const reader=createHistory(config);
   t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
@@ -64,14 +65,23 @@ test('OpenCode SQLite reads only the exact session and paginates without live ap
 });
 test('HTTP history requires pairing and rejects session replacement during read',async t=>{
   const f=fixture(t);fs.writeFileSync(f.file,JSON.stringify({type:'user',message:{content:'Hello'}})+'\n');
+  fs.mkdirSync(path.join(f.home,'.claude/sessions'),{recursive:true});
+  const stat=fs.readFileSync(`/proc/${process.pid}/stat`,'utf8');
+  const procStart=stat.slice(stat.lastIndexOf(')')+2).split(' ')[19];
+  fs.writeFileSync(path.join(f.home,`.claude/sessions/${process.pid}.json`),JSON.stringify({pid:process.pid,procStart,sessionId,cwd:f.home}));
   let changed=false,calls=0;
-  const herdr={call:async method=>{if(method==='pane.get'){calls++;return {pane:changed&&calls%2===0?{...f.pane,terminal_id:'replacement'}:f.pane};}if(method==='session.snapshot')return {snapshot:{protocol:22,panes:[],workspaces:[]}};throw Error(method);}};
+  const herdr={call:async method=>{
+    if(method==='pane.get'){calls++;return {pane:changed&&calls>=3?{...f.pane,terminal_id:'replacement'}:f.pane};}
+    if(method==='pane.process_info')return {process_info:{pane_id:f.pane.pane_id,foreground_processes:[{name:'claude',pid:process.pid,cwd:f.home}]}};
+    if(method==='session.snapshot')return {snapshot:{protocol:22,panes:[],workspaces:[]}};
+    throw Error(method);
+  }};
   const app=createBridge({...f.config,activityTimeline:false},{herdr,homeDirectory:f.home});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');t.after(()=>app.close());
   const url=`http://127.0.0.1:${app.server.address().port}/v1/panes/w%3Ap/history`;
   assert.equal((await fetch(url)).status,401);
   const auth=app.store.pair(app.store.pairCode(),'Test'),headers={Authorization:`Bearer ${auth.token}`};
   assert.equal((await(await fetch(url,{headers})).json()).messages[0].text,'Hello');
-  changed=true;assert.equal((await fetch(url,{headers})).status,409);
+  changed=true;calls=0;assert.equal((await fetch(url,{headers})).status,409);
   assert.equal((await fetch(url+'?path=/etc/passwd',{headers})).status,400);
 });
 test('OpenCode clips extracted text while retaining large answers/tools and valid neighbors',async t=>{

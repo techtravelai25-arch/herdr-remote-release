@@ -115,4 +115,44 @@ class NotificationAcknowledgementTest {
             manager.deleteNotificationChannel(channel)
         }
     }
+
+    @Test fun cloudReceiveRejectsExpiredShowsAndRetiresClosedPaneWithoutClearingNewerTurn() {
+        prepare()
+        val device = "test-${UUID.randomUUID()}"
+        val pane = "test-${UUID.randomUUID()}"
+        val a = UUID.randomUUID().toString()
+        val b = UUID.randomUUID().toString()
+        val expired = UUID.randomUUID().toString()
+        val tag = CompletionAlerts.slot("push", device, pane)
+        val now = System.currentTimeMillis() / 1000
+        fun show(id: String, created: Long = now, expires: Long = now + 300) =
+            CloudPush.receive(context, mapOf("eventId" to id, "deviceId" to device, "paneId" to pane,
+                "kind" to "done", "createdAt" to created.toString(), "expiresAt" to expires.toString()))
+        fun clear(id: String) = CloudPush.receive(context, mapOf("eventId" to UUID.randomUUID().toString(),
+            "deviceId" to device, "paneId" to pane, "kind" to "clear", "targetEventId" to id))
+        try {
+            show(expired, now - 100, now - 1)
+            assertPresent(setOf(tag), false)
+            show(a)
+            assertPresent(setOf(tag), true)
+            clear(a)
+            assertPresent(setOf(tag), false)
+            show(b)
+            assertPresent(setOf(tag), true)
+            clear(a)
+            assertPresent(setOf(tag), true)
+            val absent = Snapshot(herdrOnline = true, panes = emptyList())
+            CompletionAlerts.reconcile(context, absent.copy(stale = true, panesComplete = true), null, device)
+            CompletionAlerts.reconcile(context, absent.copy(panesComplete = false), null, device)
+            assertPresent(setOf(tag), true)
+            CompletionAlerts.reconcile(context, absent.copy(panesComplete = true), null, device)
+            assertPresent(setOf(tag), false)
+            show(b)
+            assertPresent(setOf(tag), false)
+        } finally {
+            listOf(a, b, expired).forEach { CompletionAlerts.clear(context, "push", device, pane, it) }
+            manager.cancel(tag, 1)
+            manager.deleteNotificationChannel(channel)
+        }
+    }
 }

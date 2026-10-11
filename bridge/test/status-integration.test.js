@@ -15,7 +15,7 @@ async function until(predicate, timeout=2500) {
 }
 function raw(status='idle') {
   return {snapshot:{protocol:22,workspaces:[{workspace_id:'w1',label:'Project'}],panes:[{
-    pane_id:'p1',workspace_id:'w1',tab_id:'t1',cwd:'/tmp',revision:1,agent:'codex',agent_status:status,title:'Agent'
+    pane_id:'p1',workspace_id:'w1',tab_id:'t1',cwd:'/tmp',revision:1,agent:'opencode',agent_status:status,title:'Agent'
   }],agents:[]}};
 }
 async function fixture(t,{pushEnabled=false,activityTimeline=false}={}) {

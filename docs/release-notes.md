@@ -1,4 +1,19 @@
-# Herdr Remote 0.8.39
+# Herdr Remote 0.8.43
+
+Android 0.8.43 (78) and laptop companion 0.8.43 (sequence 80). The signed community APK updates 0.8.39 in place with the same certificate. Update both the app and companion.
+
+- Conversations follow the current native agent session. Changed, ambiguous or conflicting identity falls back safely instead of showing an unrelated transcript.
+- Working and Idle use native turn evidence. Active Codex work cannot be marked complete by terminal text; Claude completion waits for a stable final native reply.
+- Completion alerts keep a stable identity across resume and restart. Historical completed work does not create a new alert after rebinding.
+- Closing a session clears its alerts after a fresh complete session list. Exact cancellation survives queued delivery, restart and a full notification queue.
+- Optional cloud push carries a ten-minute expiry, and the Android app rejects stale or undated completion shows. Cancellation stays compatible with older clients.
+- Content-free diagnostics explain unavailable native evidence and notification queue health. Unsupported or partial native formats cannot reuse an old completion.
+
+The default community APK uses QR pairing with optional cloud endpoints disabled. A self-hosted deployment must update its companion and portal as well as the phone app for the cloud-push changes. See [validation and limits](release-validation.md).
+
+Download [herdr-remote.apk](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) and follow [laptop setup](setup.md). Android 8.0+ is required.
+
+## Herdr Remote 0.8.39
 
 Android 0.8.39 (74) and laptop companion 0.8.39 (sequence 76). This signed community APK updates 0.8.38 in place with the same certificate. Update both the app and companion for the new trust control.
 

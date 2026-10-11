@@ -8,6 +8,7 @@ import {sendFCM,handlePush} from '../src/push.js';
 import {generateKeyPair,exportPKCS8} from 'jose';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
+const withoutTimes=event=>{const {createdAt,expiresAt,...rest}=event;return rest;};
 const bridgeToken='b'.repeat(43), phoneToken='f'.repeat(40);
 function setup(t,sender=async()=>({invalidToken:false})) {
   const sqlite=new DatabaseSync(':memory:'); t.after(()=>sqlite.close());
@@ -61,13 +62,27 @@ test('delivery deduplicates per event and session, retries only failed recipient
   assert.equal((await s.event()).status,503);assert.equal(calls.length,2);rejectSecond=false;
   assert.equal((await s.event()).status,200);assert.equal(calls.length,3);assert.equal(calls.filter(x=>x.token===phoneToken).length,1);
   assert.equal((await s.event()).status,200);assert.equal(calls.length,3);
-  assert.deepEqual(Object.keys(calls[0].event).sort(),['deviceId','eventId','kind','paneId']);
+  assert.deepEqual(Object.keys(calls[0].event).sort(),['createdAt','deviceId','eventId','expiresAt','kind','paneId']);
+  assert.equal(calls[0].event.expiresAt-calls[0].event.createdAt,600);
   assert.equal(s.sqlite.prepare('SELECT count(*) AS n FROM push_subscriptions').get().n,1);
 });
 test('event validation rejects content, forged device IDs, old events and malformed pane IDs',async t=>{
   let sent=0;const s=setup(t,async()=>{sent++;return {invalidToken:false};});await s.register();
   for(const override of [{text:'private terminal content'},{deviceId:'other'},{createdAt:1},{paneId:'bad\n'},{kind:'working'}])assert.equal((await s.event('bad',override)).status,400);
   assert.equal(sent,0);
+});
+test('versioned show expiry reaches the delivery payload and stale or overlong shows are refused',async t=>{
+  const sent=[];const s=setup(t,async(_env,_token,event)=>{sent.push(event);return {invalidToken:false};});await s.register();
+  const createdAt=Math.floor(Date.now()/1000);
+  assert.equal((await s.event('fresh',{createdAt,expiresAt:createdAt+90})).status,200);
+  assert.equal(sent[0].createdAt,createdAt);
+  assert.equal(sent[0].expiresAt,createdAt+90);
+  for(const [id,overrides] of [
+    ['expired',{createdAt:createdAt-90,expiresAt:createdAt-1}],
+    ['overlong',{createdAt,expiresAt:createdAt+601}],
+    ['old',{createdAt:createdAt-601,expiresAt:createdAt-1}],
+  ]) assert.equal((await s.event(id,overrides)).status,400);
+  assert.equal(sent.length,1);
 });
 test('clear events retain the target completion and authenticated laptop scope, with idempotent delivery',async t=>{
   const sent=[];const s=setup(t,async(_env,token,event)=>{sent.push({token,event});return {invalidToken:false};});
@@ -76,7 +91,8 @@ test('clear events retain the target completion and authenticated laptop scope, 
   await s.register('o'.repeat(40),'other');
   assert.equal((await s.event('clear-one',{kind:'clear',targetEventId:'completion-one'})).status,200);
   assert.equal((await s.event('clear-one',{kind:'clear',targetEventId:'completion-one'})).status,200);
-  assert.deepEqual(sent,[{token:phoneToken,event:{eventId:'clear-one',deviceId:'laptop',paneId:'w1:p1',kind:'clear',targetEventId:'completion-one'}}]);
+  assert.deepEqual(sent.map(({token,event})=>({token,event:withoutTimes(event)})),[{token:phoneToken,event:{eventId:'clear-one',deviceId:'laptop',paneId:'w1:p1',kind:'clear',targetEventId:'completion-one'}}]);
+  assert.equal(sent[0].event.expiresAt-sent[0].event.createdAt,86400);
 });
 test('clear validation rejects missing, malformed, self-targeting and extraneous fields',async t=>{
   let sent=0;const s=setup(t,async()=>{sent++;return {invalidToken:false};});await s.register();
@@ -99,11 +115,14 @@ test('FCM sends opaque completion and clear payloads through fixed endpoints and
   s.env.FIREBASE_SERVICE_ACCOUNT=JSON.stringify({project_id:'test-project',client_email:'test@test-project.iam.gserviceaccount.com',private_key:await exportPKCS8(privateKey)});
   const calls=[];const originalFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=originalFetch;});
   globalThis.fetch=async(url,options)=>{calls.push({url,options});return Response.json(url.includes('oauth2.googleapis.com')?{access_token:'test-oauth-token'}:{name:'sent'});};
-  assert.deepEqual(await sendFCM(s.env,phoneToken,{eventId:'event',deviceId:'laptop',paneId:'pane',kind:'done',text:'private terminal output'}),{invalidToken:false});
-  await sendFCM(s.env,phoneToken,{eventId:'clear',deviceId:'laptop',paneId:'pane',kind:'clear',targetEventId:'completion',text:'private'});
+  const createdAt=Math.floor(Date.now()/1000);
+  await assert.rejects(sendFCM(s.env,phoneToken,{eventId:'expired',deviceId:'laptop',paneId:'pane',kind:'done',createdAt:createdAt-600,expiresAt:createdAt-1}),/push_delivery/);
+  assert.equal(calls.length,0);
+  assert.deepEqual(await sendFCM(s.env,phoneToken,{eventId:'event',deviceId:'laptop',paneId:'pane',kind:'done',createdAt,expiresAt:createdAt+600,text:'private terminal output'}),{invalidToken:false});
+  await sendFCM(s.env,phoneToken,{eventId:'clear',deviceId:'laptop',paneId:'pane',kind:'clear',targetEventId:'completion',createdAt,expiresAt:createdAt+86400,text:'private'});
   assert.deepEqual(calls.map(c=>c.url),['https://oauth2.googleapis.com/token','https://fcm.googleapis.com/v1/projects/test-project/messages:send','https://oauth2.googleapis.com/token','https://fcm.googleapis.com/v1/projects/test-project/messages:send']);
   assert.ok(calls.every(c=>c.options.redirect==='manual'));
-  const event={eventId:'event',deviceId:'laptop',paneId:'pane',kind:'done'};
+  const event={eventId:'event',deviceId:'laptop',paneId:'pane',kind:'done',createdAt,expiresAt:createdAt+600};
   let attempts=0;
   globalThis.fetch=async()=>{attempts++;return new Response(null,{status:302,headers:{Location:'https://untrusted.example'}});};
   await assert.rejects(sendFCM(s.env,phoneToken,event),/push_authentication/);
@@ -113,12 +132,13 @@ test('FCM sends opaque completion and clear payloads through fixed endpoints and
   await assert.rejects(sendFCM(s.env,phoneToken,event),/push_delivery/);
   assert.equal(attempts,2);
   const message=JSON.parse(calls[1].options.body).message;
-  assert.deepEqual(message.data,{eventId:'event',deviceId:'laptop',paneId:'pane',kind:'done'});
+  assert.deepEqual(message.data,{eventId:'event',deviceId:'laptop',paneId:'pane',kind:'done',createdAt:String(createdAt),expiresAt:String(createdAt+600)});
   assert.deepEqual(Object.keys(message).sort(),['android','data','token']);assert.equal(JSON.stringify(message).includes('private terminal'),false);
   const clear=JSON.parse(calls[3].options.body).message;
-  assert.deepEqual(clear.data,{eventId:'clear',deviceId:'laptop',paneId:'pane',kind:'clear',targetEventId:'completion'});
+  assert.deepEqual(clear.data,{eventId:'clear',deviceId:'laptop',paneId:'pane',kind:'clear',targetEventId:'completion',createdAt:String(createdAt),expiresAt:String(createdAt+86400)});
   assert.deepEqual(Object.keys(clear).sort(),['android','data','token']);
-  assert.equal(clear.android.ttl,'86400s');assert.equal(clear.android.priority,'NORMAL');
+  assert.ok(Number.parseInt(clear.android.ttl,10)>0 && Number.parseInt(clear.android.ttl,10)<=86400);
+  assert.equal(clear.android.priority,'HIGH');
 });
 test('public accounts cannot receive another owner’s laptop notifications',async t=>{
  const delivered=[];const s=setup(t,async(_env,token)=>{delivered.push(token);return {invalidToken:false};});
@@ -139,7 +159,7 @@ test('claimed relay laptop delivers only to its current owner without legacy has
  assert.deepEqual(await(await s.call('/v1/push/config')).json(),{available:true,projectId:'test-project',applicationId:'1:123:android:abcdef',senderId:'123',apiKey:'AIza'+'a'.repeat(25)});
  const send=(id,token,eventId)=>s.call('/v1/push/events','POST',{eventId,paneId:'w1:p1',kind:'done',createdAt:Math.floor(Date.now()/1000)},token,{'X-Herdr-Laptop-ID':id});
  assert.equal((await send(laptopId,relayToken,'dynamic-one')).status,200);
- assert.deepEqual(delivered,[{token:phoneToken,event:{eventId:'dynamic-one',paneId:'w1:p1',kind:'done',deviceId:laptopId}}]);
+ assert.deepEqual(delivered.map(({token,event})=>({token,event:withoutTimes(event)})),[{token:phoneToken,event:{eventId:'dynamic-one',paneId:'w1:p1',kind:'done',deviceId:laptopId}}]);
  for(const [id,token] of [[laptopId,'x'.repeat(43)],['wrong-id',relayToken],['unclaimed','u'.repeat(43)]])assert.equal((await send(id,token,'invalid-'+id)).status,401);
  s.env.DEVICES='[{"id":"laptop","ownerEmail":"owner@example.com","label":"Legacy","url":"https://laptop.example.com"}]';
  s.env.PUSH_BRIDGE_TOKEN_HASHES=JSON.stringify({laptop:hash(bridgeToken)});
@@ -162,7 +182,7 @@ test('relay push rechecks laptop ownership and recipient after claiming each del
  s.sqlite.exec("CREATE TRIGGER recipient_race AFTER INSERT ON push_deliveries WHEN NEW.event_id='recipient-race' AND NEW.session_id='session-one' BEGIN DELETE FROM push_subscriptions WHERE session_id='session-one'; END");
  assert.equal((await send('recipient-race')).status,200);
  assert.deepEqual(sent.map(x=>x.token),['g'.repeat(40)]);
- assert.deepEqual(sent[0].event,{eventId:'recipient-race',paneId:'w1:p1',kind:'clear',targetEventId:'completion-one',deviceId:laptopId});
+ assert.deepEqual(withoutTimes(sent[0].event),{eventId:'recipient-race',paneId:'w1:p1',kind:'clear',targetEventId:'completion-one',deviceId:laptopId});
  await s.register();
  s.sqlite.exec("CREATE TRIGGER session_race AFTER INSERT ON push_deliveries WHEN NEW.event_id='session-race' AND NEW.session_id='session-one' BEGIN UPDATE sessions SET expires_at=0 WHERE id='session-one'; END");
  assert.equal((await send('session-race')).status,200);assert.deepEqual(sent.map(x=>x.token),['g'.repeat(40),'g'.repeat(40)]);

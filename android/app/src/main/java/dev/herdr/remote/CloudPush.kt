@@ -32,6 +32,30 @@ class RemoteApplication : Application() {
     }
 }
 
+/** Parses the authenticated portal payload before it can reach the tray. */
+internal data class CloudPushEvent(val eventId: String, val deviceId: String, val paneId: String,
+                                   val kind: String, val targetEventId: String?) {
+    companion object {
+        private val idPattern = Regex("[\\w-]{1,80}")
+        fun parse(data: Map<String, String>, nowSeconds: Long): CloudPushEvent? {
+            val event = data["eventId"]?.takeIf { it.matches(idPattern) } ?: return null
+            val device = data["deviceId"]?.takeIf { it.matches(idPattern) } ?: return null
+            val pane = data["paneId"]?.takeIf { it.isNotBlank() && it.length <= 256 && it.none { ch -> Character.isISOControl(ch) } } ?: return null
+            val kind = data["kind"]?.takeIf { it in setOf("done", "needs_input", "error", "clear") } ?: return null
+            val target = if (kind == "clear") data["targetEventId"]?.takeIf { it.matches(idPattern) && it != event } ?: return null else null
+            if (kind != "clear") {
+                // Legacy shows without an expiry are withheld. Legacy clears still
+                // tombstone their exact target so delayed shows cannot reappear.
+                val created = data["createdAt"]?.toLongOrNull() ?: return null
+                val expires = data["expiresAt"]?.toLongOrNull() ?: return null
+                if (created > nowSeconds + 60 || created < nowSeconds - 600 ||
+                    expires <= nowSeconds || expires <= created || expires > created + 600) return null
+            }
+            return CloudPushEvent(event, device, pane, kind, target)
+        }
+    }
+}
+
 /** Opt-in only; FCM identifiers are public configuration, never account credentials. */
 object CloudPush {
     const val EXTRA_DEVICE_ID = "push_device_id"
@@ -107,19 +131,19 @@ object CloudPush {
         if (!enabled(context)) return
         val account = AccountStore(context).load() ?: return
         if (account.expiresAt <= System.currentTimeMillis()/1000) return
-        val event = data["eventId"] ?: return
-        val device = data["deviceId"] ?: return
-        val pane = data["paneId"] ?: return
-        val kind = data["kind"] ?: return
-        if (!event.matches(Regex("[\\w-]{1,80}")) || !device.matches(Regex("[\\w-]{1,80}")) || pane.isBlank() || pane.length > 256 || kind !in setOf("done", "needs_input", "error", "clear")) return
-        if (kind == "clear") {
-            val target = data["targetEventId"]?.takeIf { it.matches(Regex("[\\w-]{1,80}")) } ?: return
+        receive(context, data)
+    }
+
+    /** Shared receive boundary used after account checks and by isolated tray tests. */
+    internal fun receive(context: Context, data: Map<String, String>) {
+        val event = CloudPushEvent.parse(data, System.currentTimeMillis()/1000) ?: return
+        if (event.kind == "clear") {
             // Record the tombstone even when Android's notification permission is denied.
-            CompletionAlerts.clear(context, PUSH_SOURCE, device, pane, target, event)
+            CompletionAlerts.clear(context, PUSH_SOURCE, event.deviceId, event.paneId, event.targetEventId!!, event.eventId)
             return
         }
-        CompletionAlerts.show(context, PUSH_SOURCE, device, pane, event, event) {
-            show(context, device, pane, kind)
+        CompletionAlerts.show(context, PUSH_SOURCE, event.deviceId, event.paneId, event.eventId, event.eventId) {
+            show(context, event.deviceId, event.paneId, event.kind)
         }
     }
 

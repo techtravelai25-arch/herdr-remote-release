@@ -21,11 +21,11 @@ function fixture(t, lines) {
 }
 
 test('native matching task completion supplies metadata without response contents', t => {
-  const f = fixture(t, [event('task_started'), JSON.stringify({type: 'response_item', payload: {role: 'assistant', content: 'private reply'}}), event('task_complete')]);
+  const f = fixture(t, [event('task_started'), JSON.stringify({type: 'response_item', payload: {type:'message',role: 'assistant', content: 'private reply'}}), event('task_complete')]);
   assert.deepEqual(readCodexLifecycle(f.session, f.home), {state: 'complete', turnId: 'turn-a', timestamp: Date.parse(endTime), startedAt: Date.parse(startTime)});
 });
 test('assistant final wording does not complete a native active turn', t => {
-  const f = fixture(t, [event('task_started'), JSON.stringify({type: 'response_item', payload: {role: 'assistant', phase: 'final_answer', content: 'Done!'}})]);
+  const f = fixture(t, [event('task_started'), JSON.stringify({type: 'response_item', payload: {type:'message',role: 'assistant', phase: 'final_answer', content: 'Done!'}})]);
   assert.equal(readCodexLifecycle(f.session, f.home).state, 'active');
 });
 test('matching native abort is distinct from a successful completion', t => {
@@ -55,15 +55,44 @@ test('terminal-only event identifies its turn, but mismatched completion after a
 test('incomplete appended line cannot revive an older completion', t => {
   const f = fixture(t, [event('task_started'), event('task_complete')]);
   fs.appendFileSync(f.file, '{"type":"event_msg","payload":{"type":"task_started"');
-  assert.equal(readCodexLifecycle(f.session, f.home), null);
+  const diagnostic = {};
+  assert.equal(readCodexLifecycle(f.session, f.home, {diagnostic}), null);
+  assert.equal(diagnostic.reason, 'partial_append');
 });
 test('malformed JSON, missing event payload, and invalid lifecycle identity or timestamps leave status unknown', t => {
   const f = fixture(t, [event('task_started'), 'not JSON', event('task_complete')]);
-  assert.equal(readCodexLifecycle(f.session, f.home), null);
+  const diagnostic = {};
+  assert.equal(readCodexLifecycle(f.session, f.home, {diagnostic}), null);
+  assert.equal(diagnostic.reason, 'unsupported_schema');
   for (const invalid of [JSON.stringify({type:'event_msg'}), event('task_complete', null), event('task_complete', '', endTime), event('task_complete', 'turn-a', 'not a date'), event('task_complete', 'turn-a', '2026-10-08T23:59:59Z')]) {
     fs.writeFileSync(f.file, event('task_started') + '\n' + invalid + '\n');
     assert.equal(readCodexLifecycle(f.session, f.home), null);
   }
+});
+test('bounded tail reports missing native evidence without exposing record contents', t => {
+  const f = fixture(t, [event('task_started'), JSON.stringify({type:'response_item',payload:'x'.repeat(4096)})]);
+  const diagnostic = {};
+  assert.equal(readCodexLifecycle(f.session, f.home, {maxBytes:128,diagnostic}), null);
+  assert.deepEqual(diagnostic, {reason:'bounded_tail'});
+});
+test('unrecognized Codex records after completion cannot certify the old turn', t => {
+  const f=fixture(t,[event('task_started'),event('task_complete'),
+    JSON.stringify({type:'event_msg',timestamp:endTime,payload:{type:'turn_started',turn_id:'turn-b'}})]);
+  const diagnostic={};
+  assert.equal(readCodexLifecycle(f.session,f.home,{diagnostic}),null);
+  assert.equal(diagnostic.reason,'unsupported_schema');
+  fs.writeFileSync(f.file,[event('task_started'),event('task_complete'),
+    JSON.stringify({type:'future_turn_record',timestamp:endTime})].join('\n')+'\n');
+  assert.equal(readCodexLifecycle(f.session,f.home,{diagnostic}),null);
+  assert.equal(diagnostic.reason,'unsupported_schema');
+  fs.writeFileSync(f.file,[event('task_started'),event('task_complete'),
+    JSON.stringify({type:'event_msg',payload:{type:'token_count'}})].join('\n')+'\n');
+  assert.equal(readCodexLifecycle(f.session,f.home,{diagnostic})?.state,'complete');
+  fs.appendFileSync(f.file,JSON.stringify({type:'response_item',payload:{type:'message',role:'user'}})+'\n');
+  assert.equal(readCodexLifecycle(f.session,f.home,{diagnostic}),null);
+  assert.equal(diagnostic.reason,'unsupported_schema');
+  fs.appendFileSync(f.file,event('task_started','turn-b','2026-10-09T00:00:02Z')+'\n');
+  assert.equal(readCodexLifecycle(f.session,f.home,{diagnostic})?.state,'active');
 });
 test('synchronous re-read observes a newly appended task start', t => {
   const f = fixture(t, [event('task_started'), event('task_complete')]);
@@ -110,7 +139,8 @@ test('hardlinks, directories, empty logs, unsupported sessions, and missing home
 });
 test('async observation accepts explicit Codex path and does not inspect other agents', async t => {
   const f = fixture(t, [event('task_started'), event('task_complete')]);
-  const value = await observeCodexLifecycle({agent: 'codex', agent_session: f.session}, f.home);
+  const value = await observeCodexLifecycle({agent: 'codex', agent_session: f.session,
+    binding:{state:'verified',generation:'fixture'}}, f.home);
   assert.deepEqual(value.session, f.session);
   assert.equal(value.lifecycle.state, 'complete');
   assert.equal(await observeCodexLifecycle({agent: 'claude', agent_session: f.session}, f.home), null);
@@ -136,12 +166,17 @@ function namedRollout(f, folder = f.root, id = sessionId) {
 }
 test('reported Codex session ID resolves its exact nested rollout and supports optional agent metadata', async t => {
   const f = fixture(t, [event('task_started'), event('task_complete')]);
-  namedRollout(f, path.join(f.root, '2026', '10', '09'));
+  const rollout=namedRollout(f, path.join(f.root, '2026', '10', '09'));
   namedRollout(f, f.root, '01a11cef-0123-4567-89ab-ffffffffffff');
+  const db=new DatabaseSync(path.join(f.home,'.codex','state_5.sqlite'));
+  db.exec('CREATE TABLE threads(id TEXT,rollout_path TEXT,cwd TEXT,title TEXT,name TEXT,archived INTEGER,thread_source TEXT)');
+  db.prepare("INSERT INTO threads VALUES(?,?,?,?,?,0,'user')").run(sessionId,rollout,'/project','Exact thread','Exact thread');
+  db.close();
   assert.equal(readCodexLifecycle(idSession, f.home).state, 'complete');
   assert.equal(readCodexLifecycle({...idSession, value: sessionId.toUpperCase()}, f.home).state, 'complete');
   const {agent, ...descriptor} = idSession;
-  assert.equal((await observeCodexLifecycle({agent, agent_session: descriptor}, f.home)).lifecycle.state, 'complete');
+  assert.equal((await observeCodexLifecycle({agent,agent_session:descriptor,cwd:'/project',
+    terminal_title_stripped:'Exact thread | project'}, f.home)).lifecycle.state, 'complete');
 });
 test('session ID lookup rejects invalid IDs, partial suffix matches, and ambiguous duplicates', t => {
   const f = fixture(t, [event('task_started'), event('task_complete')]);

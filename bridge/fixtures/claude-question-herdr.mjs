@@ -13,15 +13,19 @@ import os from 'node:os';
 import path from 'node:path';
 import {createBridge} from '../src/server.js';
 import {detectClaudeQuestion} from '../src/claude-question.js';
+import {withClaudeSession} from '../src/claude-session.js';
+import {readClaudeLifecycle} from '../src/claude-lifecycle.js';
 
 // Reject outside Herdr before any control command, including cleanup.
 assert.equal(process.env.HERDR_ENV,'1','Run this fixture from a Herdr-managed pane.');
-assert.ok(process.argv.slice(2).every(arg=>['--multi','--trust-exit'].includes(arg)),
-  'Only --multi and --trust-exit are supported.');
+assert.ok(process.argv.slice(2).every(arg=>['--multi','--trust-exit','--lifecycle'].includes(arg)),
+  'Only --multi, --trust-exit and --lifecycle are supported.');
 assert.ok(!(process.argv.includes('--multi')&&process.argv.includes('--trust-exit')),
   'Choose one fixture mode.');
 const multiSelect=process.argv.includes('--multi');
 const trustExit=process.argv.includes('--trust-exit');
+const lifecycleCanary=process.argv.includes('--lifecycle');
+assert.ok(!lifecycleCanary||!multiSelect&&!trustExit,'Run the lifecycle canary independently.');
 const foundClaude=spawnSync('which',['claude'],{encoding:'utf8',timeout:5000});
 const claudeBin=process.env.CLAUDE_BIN
   ?path.resolve(process.env.CLAUDE_BIN):foundClaude.stdout.trim();
@@ -86,6 +90,9 @@ api=createServer(async(req,res)=>{
         if(item?.type==='tool_result')answers.push(item.content);
       const first=!emitted&&body.tools?.some(tool=>tool.name==='AskUserQuestion');
       if(first)emitted=true;
+      // Give Herdr and the real bridge an observable active interval after the
+      // tool result, rather than a fake response faster than terminal sampling.
+      if(lifecycleCanary&&!first&&answers.length)await sleep(2500);
       res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache'});
       res.end(sse(first));return;
     }
@@ -115,7 +122,7 @@ try {
   }
   assert.match(status,/status: running/);
   const socketPath=/socket: (.+)/.exec(status)?.[1];assert.ok(socketPath);
-  const claudeConfig=path.join(root,'claude-config');
+  const claudeConfig=path.join(root,'.claude');
   fs.mkdirSync(claudeConfig,{recursive:true});
   fs.writeFileSync(path.join(claudeConfig,'.claude.json'),
     JSON.stringify({hasCompletedOnboarding:true}));
@@ -134,8 +141,11 @@ exec /usr/bin/env -i \
   NO_PROXY=127.0.0.1,localhost \
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
   DISABLE_TELEMETRY=1 \
-  ${shellQuote(fixtureClaude)} --model claude-sonnet-4-5
+  ${shellQuote(fixtureClaude)} --model claude-sonnet-4-5 "$@"
 `,{mode:0o700});
+  // Keep the tested pane unseen in this owned headless session, so genuine
+  // completion exercises Done/event publication rather than focused Idle.
+  if(lifecycleCanary)cli('workspace','create','--cwd',root,'--label','fixture-focus-anchor');
   const created=cli('workspace','create','--cwd',root,'--label','question-fixture','--no-focus');
   const paneId=created.root_pane.pane_id;
   ownPaneId=paneId;
@@ -260,6 +270,16 @@ exec /usr/bin/env -i \
     assert.equal(card.question.prompt,question.questions[0].question);
     assert.deepEqual(card.question.options.slice(0,2),[
       'Keep local Use local fixture data.','Use sample Use synthetic sample data.']);
+    if(lifecycleCanary) {
+      const bound=await withClaudeSession(herdr,(await herdr.call('pane.get',{pane_id:paneId})).pane,root);
+      assert.equal(bound.binding?.state,'verified','The native process must establish identity during the active tool turn.');
+      assert.equal(readClaudeLifecycle(bound.agent_session,root)?.state,'active');
+      const response=await fetch(`http://127.0.0.1:${bridge.server.address().port}/v1/snapshot`,{
+        headers:{Authorization:`Bearer ${device.token}`}});
+      assert.equal(response.status,200);
+      const published=(await response.json()).panes.find(pane=>pane.id===paneId);
+      assert.notEqual(published.status,'done');assert.ok(!published.completionEventId);
+    }
     const first=await request('/answer','POST',{operationId:'herdr-fixture-open-custom',
       attachmentId:card.attachmentId,questionId:card.question.id,option:2});
     assert.equal(first.stage,'text');
@@ -296,6 +316,60 @@ exec /usr/bin/env -i \
     assert.ok(answers.some(answer=>typeof answer==='string'&&answer.startsWith(
       'The user answered: "How should the local fixture proceed?"="Use local previews".')),
       'Claude did not send the exact custom answer as a tool_result.');
+    if(lifecycleCanary) {
+      const snapshot=async()=>{
+        const response=await fetch(`http://127.0.0.1:${bridge.server.address().port}/v1/snapshot`,{
+          headers:{Authorization:`Bearer ${device.token}`}});
+        assert.equal(response.status,200);
+        return (await response.json()).panes.find(pane=>pane.id===paneId);
+      };
+      const until=async(predicate,label)=>{
+        const deadline=Date.now()+18000;
+        while(Date.now()<deadline){const result=await predicate();if(result)return result;await sleep(100);}
+        throw Error('Native lifecycle canary timed out: '+label);
+      };
+      let lastDecision;
+      const completed=await until(async()=>{
+        const current=(await herdr.call('pane.get',{pane_id:paneId})).pane;
+        const bound=await withClaudeSession(herdr,current,root);
+        const native=readClaudeLifecycle(bound.agent_session,root);
+        const published=await snapshot();
+        const decision=JSON.stringify({binding:bound.binding?.state,bindingReason:bound.binding?.reason,
+          native:native?.state,published:published?.status,reason:published?.nativeReason,raw:current.agent_status});
+        if(decision!==lastDecision){console.log('LIFECYCLE_DECISION:',decision);lastDecision=decision;}
+        assert.notEqual(bound.binding?.state,'conflict','Native process record must agree with the live pane.');
+        if(native?.state!=='complete') {
+          assert.notEqual(published?.status,'done','An unfinished native turn cannot publish Done.');
+          assert.ok(!published?.completionEventId||published.completionAcknowledged,'Unfinished native work cannot create a fresh alert.');
+          return null;
+        }
+        if(bound.binding?.state!=='verified'||!['done','idle'].includes(published?.status))return null;
+        assert.ok(published.completionEventId,'The completed native turn must create an event.');
+        if(published.status==='idle')assert.equal(published.completionAcknowledged,true,'A seen native completion must be acknowledged.');
+        return {session:bound.agent_session,published};
+      },'verified native completion through paired snapshot');
+      const history=await request('/history');
+      assert.ok(JSON.stringify(history).includes('Done.'),'The same native conversation must supply history.');
+      for(let i=0;i<3;i++)assert.equal((await snapshot()).completionEventId,completed.published.completionEventId,
+        'Repeated observations must retain one logical completion event.');
+      // Only this fixture's pane is stopped. Resume the native CLI in place and
+      // prove its historical completion cannot become a fresh alert.
+      cli('pane','send-keys',paneId,'ctrl+c');cli('pane','send-keys',paneId,'ctrl+c');
+      await until(async()=>!(await herdr.call('pane.get',{pane_id:paneId})).pane.agent,'owned Claude exit');
+      assert.equal(completed.session.kind,'id');
+      assert.match(completed.session.value,/^[0-9a-f-]{36}$/i);
+      cli('pane','run',paneId,`${shellQuote(launcher)} --resume ${shellQuote(completed.session.value)}`);
+      await until(async()=>{
+        const current=(await herdr.call('pane.get',{pane_id:paneId})).pane;
+        const bound=await withClaudeSession(herdr,current,root);
+        if(bound.binding?.state!=='verified'||bound.agent_session?.value!==completed.session.value)return null;
+        const published=await snapshot();
+        assert.ok(!published.completionEventId||published.completionEventId===completed.published.completionEventId,
+          'Native resume cannot manufacture another completion.');
+        return true;
+      },'same native conversation after resume');
+      console.log('LIFECYCLE_CANARY: verified live process -> native conversation -> paired history/status -> one stable event -> native resume without another event');
+    }
     console.log('PASS: authenticated bridge output and answer -> real Herdr socket and pane -> native Claude -> fake API tool_result');
     console.log('TOOL_RESULT: "How should the local fixture proceed?"="Use local previews"');
     console.log('QUESTION_MODE:',multiSelect?'multi with checkbox clear/recheck and review':'single');

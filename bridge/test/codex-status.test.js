@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {once} from 'node:events';
+import {DatabaseSync} from 'node:sqlite';
 import {CodexStatus} from '../src/codex-status.js';
 import {createBridge} from '../src/server.js';
 
@@ -11,9 +12,14 @@ function fixture(t) {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'codex-status-'));
   const root=path.join(home,'.codex','sessions');fs.mkdirSync(root,{recursive:true});
   const file=path.join(root,'rollout.jsonl');fs.writeFileSync(file,'');
+  const db=new DatabaseSync(path.join(home,'.codex','state_1.sqlite'));
+  db.exec('CREATE TABLE threads(id TEXT,rollout_path TEXT,cwd TEXT,title TEXT,name TEXT,archived INTEGER,thread_source TEXT)');
+  db.prepare("INSERT INTO threads VALUES(?,?,?,?,?,0,'user')").run('11111111-1111-4111-8111-111111111111',file,home,'Thread','Thread');
+  db.close();
   t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
   const pane={pane_id:'p1',terminal_id:'term1',workspace_id:'w1',tab_id:'t1',agent:'codex',agent_status:'working',
-    cwd:home,terminal_title_stripped:'Thread | project',revision:1,agent_session:{agent:'codex',kind:'path',value:file}};
+    cwd:home,terminal_title_stripped:'Thread | project',revision:1,agent_session:{agent:'codex',kind:'path',value:file},
+    binding:{state:'verified',generation:'direct-fixture',sessionId:'11111111-1111-4111-8111-111111111111',reason:'fixture'}};
   const append=(type,turn_id,time)=>fs.appendFileSync(file,JSON.stringify({timestamp:new Date(time).toISOString(),type:'event_msg',payload:{type,turn_id}})+'\n');
   const status=new CodexStatus(home);
   return {home,file,pane,append,status};
@@ -29,6 +35,31 @@ test('native completion clears a retained working title and stays seen after PC 
   assert.equal(f.status.status('p1','working'),'working');
   f.append('task_complete','b',4000);
   assert.equal(f.status.status('p1','working'),'done');
+});
+test('unsupported native event after completion cannot keep a stale Done correction',async t=>{
+  const f=fixture(t);f.append('task_started','a',1000);f.append('task_complete','a',2000);
+  await f.status.observe([f.pane],null);
+  assert.equal(f.status.status('p1','working'),'done');
+  fs.appendFileSync(f.file,JSON.stringify({type:'event_msg',payload:{type:'turn_started',turn_id:'b'}})+'\n');
+  assert.equal(f.status.status('p1','working'),'working');
+  assert.equal(f.status.status('p1','done'),'unknown');
+  assert.equal(f.status.metadata('p1').nativeReason,'unsupported_schema');
+});
+test('completion in a stale other-project binding cannot finish the current pane',async t=>{
+  const f=fixture(t);f.append('task_started','current',1000);
+  const oldFile=path.join(f.home,'.codex/sessions/old.jsonl');
+  fs.writeFileSync(oldFile,JSON.stringify({timestamp:new Date(2000).toISOString(),type:'event_msg',payload:{type:'task_complete',turn_id:'old'}})+'\n');
+  const db=new DatabaseSync(path.join(f.home,'.codex/state_5.sqlite'));
+  db.exec('CREATE TABLE threads(id TEXT,rollout_path TEXT,cwd TEXT,title TEXT,name TEXT,archived INTEGER,thread_source TEXT)');
+  const insert=db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,0,\'user\')');
+  insert.run('old',oldFile,'/other','Old','Old');insert.run('current',f.file,f.home,'Thread','Thread');
+  const stale={...f.pane,binding:undefined,agent_session:{agent:'codex',kind:'id',value:'old'}};
+  assert.equal((await f.status.observe([stale],null))[0].agent_status,'working');
+  f.append('task_complete','current',3000);
+  assert.equal(f.status.status('p1','working'),'working','conflicting report cannot establish completion');
+  assert.equal((await f.status.observe([f.pane],null))[0].agent_status,'done');
+  insert.run('duplicate',f.file,f.home,'Thread','Thread');db.close();
+  assert.equal((await f.status.observe([stale],null))[0].agent_status,'working','ambiguous replacement uses raw pane status');
 });
 test('abort, blocking states, explicit acknowledgement, and unsupported agents retain their meaning',async t=>{
   const f=fixture(t);f.append('task_started','a',1000);f.append('task_complete','a',2000);
@@ -54,7 +85,7 @@ test('input invalidates the old completion before ACK, rejection restores it, an
 test('pane replacement clears correction and seen state; unreadable or partial native logs leave working',async t=>{
   const f=fixture(t);f.append('task_started','a',1000);f.append('task_complete','a',2000);
   await f.status.observe([f.pane],'p1');
-  const replacement={...f.pane,terminal_id:'term2'};
+  const replacement={...f.pane,terminal_id:'term2',binding:{...f.pane.binding,generation:'replacement-fixture'}};
   assert.equal((await f.status.observe([replacement],null))[0].agent_status,'done');
   fs.appendFileSync(f.file,'{"type":"event_msg"');
   assert.equal(f.status.status('p1','working'),'working');
@@ -87,6 +118,7 @@ test('bridge HTTP and immediate events reconcile native completion without dupli
   const f=fixture(t);f.append('task_started','a',1000);let hooks;let reads=0;
   const herdr={call:async method=>{
     if(method==='pane.get')return {pane:f.pane};
+    if(method==='pane.process_info')return {process_info:{foreground_processes:[{name:'codex',pid:process.pid,cwd:f.home,argv:['codex']}]}};
     if(method==='pane.read')return {read:{text:'terminal',revision:1,truncated:false}};
     if(['pane.send_keys','pane.send_input','agent.prompt'].includes(method))return {accepted:true};
     assert.equal(method,'session.snapshot');reads++;
@@ -106,7 +138,7 @@ test('bridge HTTP and immediate events reconcile native completion without dupli
   assert.equal((await get()).status,'working');
   f.append('task_complete','a',2000);
   const before=reads;await hooks.onStatus({pane_id:'p1',agent_status:'working'});
-  assert.equal(reads,before,'native event reconciliation does not need an RPC');
+  assert.equal(reads,before+1,'native event reconciliation rechecks the live binding');
   const done=await get();assert.equal(done.status,'done');assert.ok(done.completionEventId);
   await hooks.onStatus({pane_id:'p1',agent_status:'working'});
   assert.equal((await get()).completionEventId,done.completionEventId);

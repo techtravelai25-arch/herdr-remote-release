@@ -59,6 +59,23 @@ internal data class CompletionAlertLedger(
                 }
             }
         }
+        if (snapshot.panesComplete) {
+            val live = snapshot.panes.map { it.id }.toSet()
+            val scopes = listOfNotNull(
+                localDevice?.let { "reply:$it:" to it },
+                localDevice?.let { "attention:$it:" to it },
+                cloudDevice?.let { "push:$it:" to it },
+            )
+            state.current.toMap().forEach { (slot, id) ->
+                scopes.firstOrNull { slot.startsWith(it.first) }?.let { (prefix, device) ->
+                    if (slot.removePrefix(prefix) !in live) {
+                        val (next, cancel) = state.clear(slot, device, id, now)
+                        state = next
+                        if (cancel) cancelled += slot
+                    }
+                }
+            }
+        }
         return state to cancelled.distinct()
     }
 

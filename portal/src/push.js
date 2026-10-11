@@ -19,6 +19,8 @@ export function clientPushConfig(env) {
 
 /** Fixed Google endpoints. Private service-account material remains a Worker secret. */
 export async function sendFCM(env, token, event) {
+  if(!Number.isInteger(event.createdAt)||!Number.isInteger(event.expiresAt)||event.expiresAt<=clock())
+    throw Error('push_delivery');
   const account=JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
   const config=clientPushConfig(env);
   if(!config.available || account.project_id!==config.projectId || typeof account.client_email!=='string') throw Error('push_configuration');
@@ -31,8 +33,10 @@ export async function sendFCM(env, token, event) {
   const access=await oauth.json();
   if(typeof access.access_token!=='string') throw Error('push_authentication');
   const data={eventId:event.eventId,deviceId:event.deviceId,paneId:event.paneId,kind:event.kind,
+    createdAt:String(event.createdAt),expiresAt:String(event.expiresAt),
     ...(event.kind==='clear'?{targetEventId:event.targetEventId}:{})};
-  const response=await fetch(`https://fcm.googleapis.com/v1/projects/${config.projectId}/messages:send`,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(10000),headers:{Authorization:`Bearer ${access.access_token}`,'Content-Type':'application/json'},body:JSON.stringify({message:{token,data,android:{priority:event.kind==='clear'?'NORMAL':'HIGH',ttl:'86400s'}}})});
+  const remaining=Math.max(1,event.expiresAt-clock());
+  const response=await fetch(`https://fcm.googleapis.com/v1/projects/${config.projectId}/messages:send`,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(10000),headers:{Authorization:`Bearer ${access.access_token}`,'Content-Type':'application/json'},body:JSON.stringify({message:{token,data,android:{priority:'HIGH',ttl:`${remaining}s`}}})});
   if(response.ok) return {invalidToken:false};
   const error=await response.json().catch(()=>({}));
   if(error.error?.details?.some(item=>item.errorCode==='UNREGISTERED')) return {invalidToken:true};
@@ -62,9 +66,14 @@ export async function handlePush(request, env, helpers, sender=sendFCM) {
     if(!clientPushConfig(env).available) fail(503,'push_unavailable','Cloud push is not configured.');
     const input=await body(request);
     const clear=input.kind==='clear';
-    const fields=clear?['eventId','paneId','kind','createdAt','targetEventId']:['eventId','paneId','kind','createdAt'];
-    if(!validId(input.eventId) || typeof input.paneId!=='string' || !input.paneId || input.paneId.length>256 || /[\u0000-\u001f\u007f]/.test(input.paneId) || !messageKinds.has(input.kind) || !Number.isInteger(input.createdAt) || input.createdAt<clock()-86400 || input.createdAt>clock()+60 || Object.keys(input).some(k=>!fields.includes(k)) || (clear&&(!validId(input.targetEventId)||input.targetEventId===input.eventId))) fail(400,'invalid_event','Invalid event.');
+    const fields=clear?['eventId','paneId','kind','createdAt','expiresAt','targetEventId']:['eventId','paneId','kind','createdAt','expiresAt'];
+    // Older bridges omitted expiresAt. Their shows get the new ten-minute policy;
+    // exact clears retain the 24-hour transport window during migration.
+    const expiresAt=input.expiresAt??(input.createdAt+(clear?86400:600));
+    if(!validId(input.eventId) || typeof input.paneId!=='string' || !input.paneId || input.paneId.length>256 || /[\u0000-\u001f\u007f]/.test(input.paneId) || !messageKinds.has(input.kind) || !Number.isInteger(input.createdAt) || !Number.isInteger(expiresAt) ||
+      input.createdAt<clock()-(clear?86400:600) || input.createdAt>clock()+60 || expiresAt<=clock() || expiresAt<=input.createdAt || expiresAt>input.createdAt+(clear?86400:600) || Object.keys(input).some(k=>!fields.includes(k)) || (clear&&(!validId(input.targetEventId)||input.targetEventId===input.eventId))) fail(400,'invalid_event','Invalid event.');
     const event={eventId:input.eventId,paneId:input.paneId,kind:input.kind,deviceId,
+      createdAt:input.createdAt,expiresAt,
       ...(clear?{targetEventId:input.targetEventId}:{})};
     await env.DB.prepare('DELETE FROM push_deliveries WHERE claimed_at<?').bind(clock()-172800).run();
     await env.DB.prepare('DELETE FROM push_subscriptions WHERE session_id NOT IN (SELECT id FROM sessions WHERE expires_at>?)').bind(clock()).run();
