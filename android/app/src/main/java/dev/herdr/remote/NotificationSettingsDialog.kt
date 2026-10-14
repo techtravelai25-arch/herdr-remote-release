@@ -3,6 +3,7 @@ package dev.herdr.remote
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -10,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -17,6 +19,7 @@ import androidx.compose.ui.unit.dp
     state: RemoteState,
     denied: Boolean,
     onCloudChange: (Boolean) -> Unit,
+    onPauseChange: (Boolean) -> Unit,
     onMonitoring: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -31,6 +34,16 @@ import androidx.compose.ui.unit.dp
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Know when a reply is ready or an agent needs you.")
+                Row(Modifier.toggleable(state.alertsPaused, role = Role.Switch, onValueChange = onPauseChange),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Pause phone alerts", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                        Text("Silence alerts while you work at your laptop. Turning this off does not replay missed alerts.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(checked = state.alertsPaused, onCheckedChange = null)
+                }
+                HorizontalDivider()
                 if (Deployment.portalEnabled) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("Cloud push", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)

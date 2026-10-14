@@ -68,7 +68,7 @@ import androidx.compose.ui.unit.dp
             Column {
                 SettingsRow(Icons.Default.Computer, "Laptop & account", state.accountEmail ?: if (state.paired) "Connected with QR pairing" else "Connect a laptop", onConnection)
                 HorizontalDivider(Modifier.padding(start = 68.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                SettingsRow(Icons.Default.NotificationsNone, "Notifications", when { state.cloudPushEnabled -> "Cloud push enabled"; state.notificationsEnabled -> "Live monitoring enabled"; else -> "Choose how agents notify you" }, onNotifications)
+                SettingsRow(Icons.Default.NotificationsNone, "Notifications", when { state.alertsPaused && (state.cloudPushEnabled || state.notificationsEnabled) -> "Alerts paused"; state.cloudPushEnabled -> "Cloud push enabled"; state.notificationsEnabled -> "Live monitoring enabled"; else -> "Choose how agents notify you" }, onNotifications)
                 HorizontalDivider(Modifier.padding(start = 68.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 SettingsRow(Icons.Default.Storage, "Connection diagnostics", "Phone, account, and laptop status", onDiagnostics)
             }

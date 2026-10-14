@@ -1,4 +1,15 @@
-# Herdr Remote 0.8.45
+# Herdr Remote 0.8.46
+
+Android 0.8.46 (81) and laptop companion 0.8.46 (sequence 83). Update both the app and companion. The signed community APK updates 0.8.45 in place with the same certificate.
+
+- **Pause phone alerts** silences agent notifications while you work at the laptop. Use the bell on the dashboard or the switch in Settings → Notifications. Live monitoring stays connected; alerts that arrive while paused are not replayed when you resume.
+- The companion changes only its release version.
+
+The default community APK uses QR pairing with optional cloud endpoints disabled. See [validation and limits](release-validation.md).
+
+Download [herdr-remote.apk](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) and follow [laptop setup](setup.md). Android 8.0+ is required.
+
+## Herdr Remote 0.8.45
 
 Android 0.8.45 (80) and laptop companion 0.8.45 (sequence 82). Update both the app and companion. The signed community APK updates 0.8.44 in place with the same certificate.
 

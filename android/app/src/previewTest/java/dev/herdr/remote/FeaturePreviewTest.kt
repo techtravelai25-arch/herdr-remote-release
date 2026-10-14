@@ -473,7 +473,7 @@ class FeaturePreviewTest {
     private fun notificationSettings(mode: ThemeMode) {
         render("notification-settings-${mode.name.lowercase()}", mode, "Settings") {
             NotificationSettingsDialog(fixtureState().copy(cloudPushEnabled = true, cloudPushStatus = "Cloud push is enabled."),
-                denied = false, onCloudChange = {}, onMonitoring = {}, onDismiss = {})
+                denied = false, onCloudChange = {}, onPauseChange = {}, onMonitoring = {}, onDismiss = {})
         }
     }
     @Test fun largeTextComposerReachable() = conversation(ThemeMode.LIGHT, scale = 2f, bottom = true, suffix = "-200percent-composer")

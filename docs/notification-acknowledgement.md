@@ -32,3 +32,9 @@ Local live-monitoring alerts also require an explicit `done` state after observe
 work from the same agent. `working` → `idle` never sends a reply-ready alert or
 creates a new unread marker, including with older bridges without event IDs.
 Acknowledged `done` events are suppressed. This applies to Claude and Codex alike.
+
+To silence the phone while working at the laptop, tap the bell on the dashboard
+or turn on **Settings → Notifications → Pause phone alerts**. Monitoring and
+cloud push stay connected, but no alerts are posted. Alerts that arrive while
+paused are recorded, so resuming does not replay them. This requires Android
+0.8.46 or later.

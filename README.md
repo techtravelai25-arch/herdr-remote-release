@@ -13,7 +13,7 @@ An Android companion for [Herdr](https://github.com/herdrdev/herdr). Read agent 
 
 The setup guide covers the PC requirements and connection steps. The standard APK uses QR pairing; [cloud features](portal/README.md) are optional.
 
-Version **0.8.45 (80)** installs as `dev.herdr.remote.community` and updates community 0.8.44 in place. The matching laptop companion is 0.8.45 (sequence 82). An older community APK with a different signer requires a fresh installation and pairing. See [release verification](docs/releases.md).
+Version **0.8.46 (81)** installs as `dev.herdr.remote.community` and updates community 0.8.45 in place. The matching laptop companion is 0.8.46 (sequence 83). An older community APK with a different signer requires a fresh installation and pairing. See [release verification](docs/releases.md).
 
 ## What works
 

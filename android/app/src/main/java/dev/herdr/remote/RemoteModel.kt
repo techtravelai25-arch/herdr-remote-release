@@ -25,6 +25,7 @@ data class RemoteState(
     val openingNotification: Boolean = false,
     val loadingInitialConnection: Boolean = false,
     val notificationsEnabled: Boolean = false,
+    val alertsPaused: Boolean = false,
   val online: Boolean = false, val live: Boolean = false, val busy: Boolean = false,
   val connectionError: String? = null,
   val attachments: Map<String, List<DraftAttachment>> = emptyMap(), val sendingStatus: String? = null,
@@ -81,7 +82,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         loadingInitialConnection = bridge != null && account?.expiresAt?.let { it <= System.currentTimeMillis() / 1000 } != true,
         portalDeviceId = bridge?.credentials?.portalDeviceId ?: bridge?.credentials?.takeIf { !allowed }?.relayLaptopId, accountEmail = account?.email,
             signInRequired = account?.expiresAt?.let { it <= System.currentTimeMillis() / 1000 } == true,
-            notificationsEnabled = ReplyNotifications.enabled(app), drafts = scoped.associate { it.paneId to it.draft }.filterValues { it.isNotEmpty() },
+            notificationsEnabled = ReplyNotifications.enabled(app), alertsPaused = CompletionAlerts.paused(app), drafts = scoped.associate { it.paneId to it.draft }.filterValues { it.isNotEmpty() },
             deliveries = scoped.mapNotNull { entry -> entry.delivery?.let { delivery -> entry.paneId to delivery } }.toMap(),
             cloudPushEnabled = CloudPush.enabled(app), cloudPushStatus = if (CloudPush.enabled(app)) "Cloud push is on" else "Cloud push is off")
   })
@@ -229,6 +230,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         if (generation == connectionGeneration && api === bridge) _state.update { it.copy(attachmentStorage = value) }
     }
     fun setReplyNotifications(enabled: Boolean) = notifications.setReplyNotifications(enabled)
+    fun setAlertsPaused(paused: Boolean) = notifications.setAlertsPaused(paused)
     fun refreshReplyNotifications() = notifications.refreshReplyNotifications()
     fun foreground(active: Boolean) {
         if (active && !CloudPush.enabled(getApplication())) refreshReplyNotifications()
@@ -403,7 +405,7 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         _state.update { RemoteState(url = credentials.url, paired = true, portalDeviceId = credentials.portalDeviceId,
             openingNotification = openingNotification,
             accountEmail = it.accountEmail, signInRequired = it.signInRequired, devices = it.devices,
-            notificationsEnabled = it.notificationsEnabled, busy = it.busy, message = "Laptop connected",
+            notificationsEnabled = it.notificationsEnabled, alertsPaused = it.alertsPaused, busy = it.busy, message = "Laptop connected",
             drafts = scoped.associate { entry -> entry.paneId to entry.draft }.filterValues { value -> value.isNotEmpty() },
             deliveries = scoped.mapNotNull { entry -> entry.delivery?.let { delivery -> entry.paneId to delivery } }.toMap(),
             cloudPushEnabled = CloudPush.enabled(getApplication()), cloudPushStatus = if (CloudPush.enabled(getApplication())) "Cloud push is on" else "Cloud push is off") }

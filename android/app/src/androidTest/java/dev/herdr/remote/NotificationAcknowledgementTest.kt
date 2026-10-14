@@ -92,6 +92,42 @@ class NotificationAcknowledgementTest {
         }
     }
 
+    @Test fun pausedAlertsStayOutOfTrayAndDoNotReplayAfterResume() {
+        prepare()
+        val device = "test-${UUID.randomUUID()}"
+        val pane = "test-${UUID.randomUUID()}"
+        val paused = UUID.randomUUID().toString()
+        val resumed = UUID.randomUUID().toString()
+        val local = CompletionAlerts.slot("reply", device, pane)
+        val cloud = CompletionAlerts.slot("push", device, pane)
+        val now = System.currentTimeMillis() / 1000
+        fun push(id: String) = CloudPush.receive(context, mapOf("eventId" to id, "deviceId" to device, "paneId" to pane,
+            "kind" to "done", "createdAt" to now.toString(), "expiresAt" to (now + 300).toString()))
+        val wasPaused = CompletionAlerts.paused(context)
+        try {
+            CompletionAlerts.setPaused(context, true)
+            post("reply", device, pane, paused)
+            push(paused)
+            assertPresent(setOf(local, cloud), false)
+            CompletionAlerts.setPaused(context, false)
+            // A delayed duplicate of an alert that arrived while paused stays silent.
+            post("reply", device, pane, paused)
+            push(paused)
+            assertPresent(setOf(local, cloud), false)
+            post("reply", device, pane, resumed)
+            push(resumed)
+            assertPresent(setOf(local, cloud), true)
+        } finally {
+            CompletionAlerts.setPaused(context, wasPaused)
+            listOf(paused, resumed).forEach { event ->
+                CompletionAlerts.clear(context, "reply", device, pane, event)
+                CompletionAlerts.clear(context, "push", device, pane, event)
+            }
+            manager.cancel(local, 1); manager.cancel(cloud, 1)
+            manager.deleteNotificationChannel(channel)
+        }
+    }
+
     @Test fun upgradeLegacyTrayAlertOnlyClearsAfterFreshConfirmedResume() {
         prepare()
         val device = "test-${UUID.randomUUID()}"

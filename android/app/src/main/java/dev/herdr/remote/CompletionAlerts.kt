@@ -10,9 +10,17 @@ import kotlinx.serialization.decodeFromString
 internal object CompletionAlerts {
     private const val PREFS = "completion_alerts"
     private const val STATE = "ledger"
+    private const val PAUSED = "paused"
     private const val NOTIFICATION_ID = 1
 
     fun slot(source: String, device: String, pane: String) = "$source:$device:$pane"
+
+    /** Muting keeps monitoring and cloud push connected; only the tray stays quiet. */
+    fun paused(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
+
+    fun setPaused(context: Context, paused: Boolean) = synchronized(this) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit(commit = true) { putBoolean(PAUSED, paused) }
+    }
 
     private fun load(context: Context): CompletionAlertLedger =
         runCatching { Bridge.json.decodeFromString<CompletionAlertLedger>(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(STATE, "{}").orEmpty()) }
@@ -27,7 +35,8 @@ internal object CompletionAlerts {
         if (!ReplyNotifications.hasPermission(context)) return@synchronized
         val (next, changed) = load(context).show(slot(source, device, pane), device, eventId, System.currentTimeMillis(), deliveryEventId)
         save(context, next)
-        if (changed) display()
+        // A paused alert is still recorded, so resuming never replays it.
+        if (changed && !paused(context)) display()
     }
 
     fun clear(context: Context, source: String, device: String, pane: String, targetEventId: String,

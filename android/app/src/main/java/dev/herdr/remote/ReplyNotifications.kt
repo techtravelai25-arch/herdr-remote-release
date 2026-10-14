@@ -96,7 +96,7 @@ class ReplyNotificationService : Service() {
         if (!ReplyNotifications.enabled(this) || !ReplyNotifications.hasPermission(this)) {
             stopSelf(); return START_NOT_STICKY
         }
-        val notification = monitoringNotification("Listening for replies and requests for input")
+        val notification = monitoringNotification(lastStatus ?: "Listening for replies and requests for input")
         if (Build.VERSION.SDK_INT >= 34) startForeground(MONITOR_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         else startForeground(MONITOR_ID, notification)
         if (monitor?.isActive != true) monitor = scope.launch { listen() }
@@ -138,7 +138,7 @@ class ReplyNotificationService : Service() {
     private fun monitoringNotification(text: String): Notification {
         val stop = PendingIntent.getService(this, 0, Intent(this, ReplyNotificationService::class.java).setAction(STOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationPresentation.builder(this, MONITOR_CHANNEL)
-            .setContentTitle("Live monitoring").setContentText(text)
+            .setContentTitle(if (CompletionAlerts.paused(this)) "Live monitoring · Alerts paused" else "Live monitoring").setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setShowWhen(false)

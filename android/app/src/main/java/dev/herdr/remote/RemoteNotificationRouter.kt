@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
-/** Routes notification taps to their laptop and pane, and owns the reply-alert and cloud-push settings. */
+/** Routes notification taps to their laptop and pane, and owns the reply-alert, cloud-push and pause settings. */
 internal class RemoteNotificationRouter(
     private val app: Application,
     private val scope: CoroutineScope,
@@ -133,6 +133,12 @@ internal class RemoteNotificationRouter(
             ReplyNotifications.setEnabled(app, false)
             state.update { it.copy(notificationsEnabled = false, message = "Could not start reply alerts. Reopen the app and try again.") }
         }
+    }
+    fun setAlertsPaused(paused: Boolean) {
+        CompletionAlerts.setPaused(app, paused)
+        state.update { it.copy(alertsPaused = paused, message = if (paused) "Phone alerts paused" else "Phone alerts resumed") }
+        // Redraw the ongoing monitoring notification so the tray shows the current state.
+        if (foreground()) ReplyNotifications.start(app)
     }
     fun refreshReplyNotifications() {
         val enabled = ReplyNotifications.enabled(app) && ReplyNotifications.hasPermission(app) && bridge() != null

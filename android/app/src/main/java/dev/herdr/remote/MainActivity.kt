@@ -212,6 +212,10 @@ class MainActivity: ComponentActivity() {
                         }
                     }
                     else {
+                        if (!setup && !activity && (state.cloudPushEnabled || state.notificationsEnabled)) IconButton(onClick = { model.setAlertsPaused(!state.alertsPaused) }) {
+                            if (state.alertsPaused) Icon(Icons.Default.NotificationsOff, "Resume phone alerts")
+                            else Icon(Icons.Default.NotificationsActive, "Pause phone alerts")
+                        }
                         if (!setup && !activity) IconButton(onClick = { activity = true; model.loadActivity() }) { Icon(Icons.Default.History, "Laptop activity") }
                         IconButton(onClick = { activity = false; appSettings = true }) { Icon(Icons.Default.Settings, "Settings") }
                     }
@@ -270,6 +274,7 @@ class MainActivity: ComponentActivity() {
         onCloudChange = { enabled ->
             if (enabled) enableNotifications(true) else model.setCloudPushEnabled(false)
         },
+        onPauseChange = model::setAlertsPaused,
         onMonitoring = {
             if (state.notificationsEnabled) { model.setReplyNotifications(false); notificationSettings = false }
             else enableNotifications(false)
