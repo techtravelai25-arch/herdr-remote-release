@@ -24,7 +24,8 @@ export class Timeline {
       this.events.push({id:randomUUID(),paneId:pane.id,title:String(pane.title||'Agent').slice(0,80),kind:pane.kind,status:pane.status,previousStatus:previous,timestamp:new Date(this.clock()).toISOString()});
       changed=true;
     }
-    for(const id of this.baseline.keys())if(!live.has(id))this.baseline.delete(id);
+    // An incomplete snapshot (a backend outage) must not forget omitted panes' baselines.
+    if(snapshot.panesComplete!==false)for(const id of this.baseline.keys())if(!live.has(id))this.baseline.delete(id);
     this.trim();
     if(changed)this.store.write('activity.json',this.events);
   }

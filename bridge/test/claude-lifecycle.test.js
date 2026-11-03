@@ -66,6 +66,14 @@ test('unrecognized Claude records after completion cannot certify the old turn',
   fs.writeFileSync(f.file,'');f.final();f.duration();f.append({type:'system',subtype:'away_summary'});
   assert.equal(f.read({diagnostic})?.state,'complete');
 });
+test('Claude 2.1.300 request and isolation metadata neither start nor end a turn',t=>{
+  const f=fixture(t),metadata=()=>{
+    for(const type of ['api-request','api-request-shape','api-request-blob','isolation-latch','bridge-session'])f.append({type});
+  };
+  f.append({type:'user',message:{content:'Task'}});metadata();assert.equal(f.read().state,'active');
+  f.final();metadata();f.duration();const completed=f.read();assert.equal(completed.state,'complete');
+  metadata();assert.deepEqual(f.read(),completed,'metadata after completion keeps the same completion identity');
+});
 test('transcript-only compaction preserves completed work but cannot finish active work',t=>{
   const f=fixture(t);
   const compact=()=>{
@@ -124,4 +132,15 @@ test('a concurrent append invalidates a completion read',t=>{
   const original=fs.readSync;let changed=false;
   fs.readSync=function(...args) {const result=original(...args);if(!changed){changed=true;f.append({type:'user',message:{content:'new'}});}return result;};
   try {assert.equal(f.read(),null);} finally {fs.readSync=original;}
+});
+test('2.1.31x ownership and tool-summary records are bookkeeping around a turn',t=>{
+  const f=fixture(t);f.append({type:'session-owner',sessionId:id});
+  f.append({type:'api-request',querySource:'repl_main_thread'});f.append({type:'api-request-shape'});f.append({type:'api-request-blob'});
+  f.append({type:'user',message:{content:'Task'}});f.append({type:'tools-used',tools:['Bash']});
+  f.append({type:'api-request',querySource:'repl_main_thread'});f.final();f.duration();
+  const done=f.read();assert.equal(done.state,'complete');
+  // The next turn's request is logged just before its user record.
+  f.append({type:'api-request',querySource:'repl_main_thread'});
+  assert.deepEqual(f.read(),done);
+  f.append({type:'user',message:{content:'Next'}});assert.equal(f.read().state,'active');
 });

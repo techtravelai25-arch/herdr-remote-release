@@ -1,6 +1,6 @@
 # Set up the laptop companion
 
-Herdr Remote requires a running Herdr 0.9.0 session with protocol 22, Node.js 22 or newer, and an HTTPS address that reaches the bridge on your laptop. The phone and bridge support direct QR pairing without an account or portal. The bridge listens only on loopback; put it behind a named HTTPS tunnel or reverse proxy that you control.
+Herdr Remote requires a running Herdr 0.9.0 session with protocol 22, Node.js 22 or newer, and an HTTPS address that reaches the bridge on your laptop. The phone and bridge support direct QR pairing without an account or portal. The bridge listens only on loopback; put it behind a named HTTPS tunnel or reverse proxy that you control. The bridge also shows Herdr desktop app sessions from the app core socket (`$XDG_RUNTIME_DIR/herdr-core/default.sock`, or `coreSocketPath` in the config); see [Herdr desktop app backend](herdr-app-backend.md).
 
 ## Direct HTTPS pairing
 

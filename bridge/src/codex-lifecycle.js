@@ -10,8 +10,11 @@ const terminalEvents = new Set(['task_complete', 'turn_aborted']);
 const neutralRecords = new Set(['token_usage_record', 'inter_agent_communication_metadata',
   'turn_context', 'world_state', 'session_meta', 'compacted']);
 const neutralEvents = new Set(['item_completed', 'token_count', 'thread_settings_applied']);
+// 0.165+ adds `additional_tools` right after task_started and `configuration_update`
+// mid-turn; both are turn content, never boundaries.
 const responseItems = new Set(['reasoning', 'custom_tool_call_output', 'custom_tool_call',
-  'function_call_output', 'function_call', 'message', 'agent_message', 'compaction']);
+  'function_call_output', 'function_call', 'message', 'agent_message', 'compaction',
+  'additional_tools', 'configuration_update']);
 
 function sessionFile(root, session) {
   if (session.kind === 'path') return path.resolve(session.value);

@@ -19,12 +19,13 @@ export function createLauncher({herdr,directories}) {
     // list cannot be persisted (for example when the disk is full).
     try {directories.record(cwd);} catch {}
   }
-  async function startAgent(paneId, kind, name) {
+  async function startAgent(paneId, kind, name, launched=false) {
     const deadline=Date.now()+40000;
-    let result;
+    // A backend that created the pane already running the agent only needs readiness.
+    let result=launched?{agent:{}}:undefined;
     // Only agent_pane_busy is a confirmed pre-launch rejection. Once a launch
     // is accepted, everything below is observation: never launch it again.
-    for (let attempt=0; ; attempt++) {
+    for (let attempt=0; !launched; attempt++) {
       try {
         const timeout=Math.min(35000,Math.max(1,deadline-Date.now()));
         result=await herdr.call('agent.start',{pane_id:paneId,kind,name,timeout_ms:30000},timeout);
@@ -46,22 +47,24 @@ export function createLauncher({herdr,directories}) {
           throw new BridgeError('agent_changed','The new pane changed while its agent was starting.',409);
         if(current?.interactive_ready || current?.agent_status==='blocked') return {type:'agent_started',agent:current,argv:result.argv||[]};
       } catch(error) {
-        if(!['agent_not_ready','agent_pane_busy'].includes(error.code)) throw error;
+        // A just-created app terminal reports its agent once the program is up.
+        if(!['agent_not_ready','agent_pane_busy',...(launched?['agent_not_found']:[])].includes(error.code)) throw error;
       }
     }
     throw new BridgeError('agent_start_timeout','The agent is still starting. Refresh the retained pane to inspect it.',504);
   }
   async function start(project,kind,name,existingWorkspace) {
     const cwd=projectPath(project);
+    const hint=kind==='terminal'?{}:{agent_kind:kind,agent_name:name};
     const created=existingWorkspace
-      ? await herdr.call('tab.create',{workspace_id:existingWorkspace,cwd,label:name,focus:false})
-      : await herdr.call('workspace.create',{cwd,label:project.label,focus:false});
+      ? await herdr.call('tab.create',{workspace_id:existingWorkspace,cwd,label:name,focus:false,...hint})
+      : await herdr.call('workspace.create',{cwd,label:project.label,focus:false,...hint});
     const id=created.root_pane.pane_id;
     try {
       // A newly created layout already contains a shell. Terminal sessions must
       // never call agent.start or send startup commands to that shell.
       if(kind==='terminal') await herdr.call('pane.rename',{pane_id:id,label:name});
-      else await startAgent(id,kind,name);
+      else await startAgent(id,kind,name,created.agent_started===true);
       rememberDirectory(cwd);
       return {paneId:id};
     } catch(e) {

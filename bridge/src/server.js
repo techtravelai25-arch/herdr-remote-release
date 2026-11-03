@@ -2,6 +2,8 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import {Herdr, BridgeError} from './herdr.js';
+import {HerdrCore,defaultCoreSocket,isCoreId} from './herdr-core.js';
+import {createHerdrMux} from './herdr-mux.js';
 import {Store} from './store.js';
 import {Attachments} from './attachments.js';
 import {createUpdateSource} from './updates.js';
@@ -31,7 +33,7 @@ import {reject,createRateLimiter} from './http-util.js';
 
 export function createBridge(config, dependencies={}) {
   config={...config,homeDirectory:dependencies.homeDirectory??os.homedir()};
-  const herdr=dependencies.herdr ?? new Herdr(config.socketPath);
+  const herdr=dependencies.herdr ?? createHerdrMux(new Herdr(config.socketPath),new HerdrCore(config.coreSocketPath||defaultCoreSocket()));
   const store=dependencies.store ?? new Store(config.stateDir);
   const history=createHistory(config);
   const timeline=config.activityTimeline===false?null:new Timeline(store);
@@ -97,20 +99,28 @@ export function createBridge(config, dependencies={}) {
         const {snapshot:raw}=await herdr.call('session.snapshot');
         if(raw.protocol!==22) throw new BridgeError('protocol_mismatch','Unsupported Herdr protocol; update the bridge after checking its schema.',503);
         const live=new Set(raw.panes.map(p=>p.pane_id));
+        // Panes of an unreachable backend are republished as last seen, without observation.
+        const staleIds=new Set(raw.stale_pane_ids||[]);
+        // The last published copy keeps its push annotations (completion and attention IDs).
+        const previous=new Map(((latestSnapshot?.herdrOnline?latestSnapshot:lastGoodSnapshot)?.panes||[]).map(p=>[p.id,p]));
+        const fresh=raw.panes.filter(p=>!staleIds.has(p.pane_id));
         const agents=new Map((raw.agents||[]).map(a=>[a.pane_id,a]));
         const newer=new Set([...statusOverrides].filter(([,event])=>event.sequence>snapshotStartedAtSequence).map(([id])=>id));
         for(const id of inputDuringFlight)newer.add(id);
-        const bound=await Promise.all(raw.panes.map(p=>withClaudeSession(herdr,p,config.homeDirectory)));
+        const bound=await Promise.all(fresh.map(p=>withClaudeSession(herdr,p,config.homeDirectory)));
         const panes=await claudeStatus.observe(await codexStatus.observe(bound,raw.focused_pane_id),raw.focused_pane_id,pane=>{
           const event=statusOverrides.get(pane.pane_id);
           return event&&event.sequence>snapshotStartedAtSequence?{status:event.status,focused:false}
             :{status:pane.agent_status,focused:pane.pane_id===raw.focused_pane_id};
         });
-        activity.observe(panes,newer);
+        activity.observe(panes,new Set([...newer,...staleIds]));
         paneAttachments.prune(live);
         menus.prune(live);
         const workspaces=raw.workspaces.map(w=>({id:w.workspace_id,label:w.label||w.workspace_id}));
-        const result={...base,herdrOnline:true,panesComplete:true,lastUpdatedAt:new Date().toISOString(),workspaces,panes:panes.map(p=>snapshotPane(p,agents))};
+        const published=new Map(panes.map(p=>[p.pane_id,snapshotPane(p,agents)]));
+        const merged=raw.panes.map(p=>staleIds.has(p.pane_id)?previous.get(p.pane_id):published.get(p.pane_id)).filter(Boolean);
+        const result={...base,herdrOnline:true,panesComplete:staleIds.size===0,lastUpdatedAt:new Date().toISOString(),workspaces,panes:merged,
+          ...(staleIds.size?{stalePaneIds:[...staleIds]}:{})};
         // Keep even an empty successful result: a real empty snapshot must
         // clear an older session list rather than resurrecting it on outage.
         // A native event received after this RPC began is reconciled against
@@ -150,6 +160,8 @@ export function createBridge(config, dependencies={}) {
       canStartHerdr:data.canStartHerdr===true&&canControl,terminalCreationEnabled:data.terminalCreationEnabled===true&&canControl};
   }
   const rate=createRateLimiter();
+  // Native TUI status events; desktop-app panes are covered by the 1 s poll.
+  const watched=panes=>panes.filter(p=>p.kind!=='terminal'&&!isCoreId(p.id));
   let last=''; let polling=false;let latestSnapshot=null;
   let publicationErrorCount=0;
   let publication=Promise.resolve();
@@ -167,10 +179,16 @@ export function createBridge(config, dependencies={}) {
     authorizeUpgrade:async req=>{const {token,device}=await auth(req);rate(device.deviceId,240);return token;},
     onConnection:()=>{void refreshPublished(true).catch(()=>{});}});
   function publish(data,force=false) {
-    try{const observed=push.observe(data);if(Array.isArray(observed?.panes))data=observed;}
+    // Stale panes keep their last push/timeline state: observers never see them.
+    const stale=new Set(data.stalePaneIds||[]);
+    const observable=stale.size?{...data,panes:data.panes.filter(p=>!stale.has(p.id))}:data;
+    try{const observed=push.observe(observable);if(Array.isArray(observed?.panes)){
+      const byId=new Map(observed.panes.map(p=>[p.id,p]));
+      data=stale.size?{...observed,panes:data.panes.map(p=>stale.has(p.id)?p:byId.get(p.id)??p)}:observed;
+    }}
     catch{publicationErrorCount++;data={...data,publicationError:'push_annotation_failed'};}
     latestSnapshot=data;
-    try{timeline?.observe(data);}catch{}
+    try{timeline?.observe(observable);}catch{}
     if(typeof dependencies.onSnapshot==='function')Promise.resolve().then(()=>dependencies.onSnapshot(data)).catch(()=>{});
     // Freshness changes on every successful poll, but should not itself
     // produce a websocket event when the session data is unchanged.
@@ -198,7 +216,7 @@ export function createBridge(config, dependencies={}) {
     const live=new Set(data.panes.map(p=>p.id));
     for(const id of statusOverrides.keys())if(!live.has(id))statusOverrides.delete(id);
     await publish(data,force);
-    statusEvents?.update(data.herdrOnline?data.panes.filter(p=>p.kind!=='terminal'):[]);
+    statusEvents?.update(data.herdrOnline?watched(data.panes):[]);
     return latestSnapshot;
   }
   // Tests with a fake RPC implementation stay isolated from the real local socket.
@@ -222,7 +240,7 @@ export function createBridge(config, dependencies={}) {
             statusOverrides.delete(event.pane_id);
             lastGoodSnapshot=data;
             await publish(data);
-            statusEvents?.update(data.panes.filter(p=>p.kind!=='terminal'));
+            statusEvents?.update(watched(data.panes));
             return;
           }
           const decision=agentStatus(event.pane_id,event.agent_status);
@@ -230,7 +248,7 @@ export function createBridge(config, dependencies={}) {
           const updated={...data,panes:data.panes.map(p=>p.id===event.pane_id?{...p,...decision,lastActivity}:p)};
           lastGoodSnapshot=updated;
           await publish(updated);
-          statusEvents?.update(updated.panes.filter(p=>p.kind!=='terminal'));
+          statusEvents?.update(watched(updated.panes));
           return latestSnapshot;
         });
         return nativePublication;

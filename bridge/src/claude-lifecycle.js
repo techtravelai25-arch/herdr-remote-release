@@ -3,12 +3,17 @@ import path from 'node:path';
 
 const LIMIT=2*1024*1024;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// These are transcript bookkeeping records observed in local 2.1.29x logs.
+// These are transcript bookkeeping records observed in local 2.1.29x-2.1.317 logs.
 // An unrecognized record or system subtype could be a new turn boundary.
 const neutralRecords=new Set(['attachment','atis-latch','last-prompt','mode','ai-title',
   'permission-mode','queue-operation','frame-link','agent-name','file-history-delta',
   'custom-title','pr-link','file-history-snapshot','artifact-comment-monitor',
-  'artifact-autoreact-ledger','cost-state','fork-context-ref']);
+  'artifact-autoreact-ledger','cost-state','fork-context-ref','bridge-session',
+  // Claude 2.1.300 request logging and isolation metadata; never turn boundaries.
+  // A main-thread request is logged just before the user/assistant record that sets the state.
+  'api-request','api-request-shape','api-request-blob','isolation-latch',
+  // Claude 2.1.31x session ownership and per-turn tool summaries.
+  'session-owner','tools-used']);
 const neutralSystem=new Set(['stop_hook_summary','away_summary','informational']);
 const activitySystem=new Set(['local_command','scheduled_task_fire']);
 

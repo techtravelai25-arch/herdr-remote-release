@@ -1,4 +1,17 @@
-# Herdr Remote 0.8.46
+# Herdr Remote 0.8.48
+
+Android 0.8.48 (83) and laptop companion 0.8.48 (sequence 85). Update both the app and companion. The signed community APK updates 0.8.46 in place with the same certificate.
+
+- The companion now also shows and controls sessions from the **Herdr desktop app** (`herdr-app`, terminals in herdr-core 0.1.x), in the same list as Herdr TUI sessions: prompts, keys, typed text, question and model menus, terminal output, conversation history, new sessions, restart, rename, close and desktop focus. Screen reads that can authorize input are checked against herdr-core and refused if incomplete. See [Herdr desktop app backend](herdr-app-backend.md).
+- The companion again confirms Claude Code turn completion with Claude Code 2.1.300 and newer, which add new metadata records to the session log.
+- The companion again confirms Codex turn completion with Codex 0.165 and newer, which add new items to the rollout log.
+- The app changes only its release version.
+
+The default community APK uses QR pairing with optional cloud endpoints disabled. See [validation and limits](release-validation.md).
+
+Download [herdr-remote.apk](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) and follow [laptop setup](setup.md). Android 8.0+ is required.
+
+## Herdr Remote 0.8.46
 
 Android 0.8.46 (81) and laptop companion 0.8.46 (sequence 83). Update both the app and companion. The signed community APK updates 0.8.45 in place with the same certificate.
 

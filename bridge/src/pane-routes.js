@@ -143,11 +143,12 @@ export function createPaneRoutes(ctx) {
     const cwd=canonicalDirectory(current.cwd);
     if(!cwd||!ctx.associatedProject(cwd)) reject('project_not_allowed','Restart requires a home folder or configured project.',403);
     // Create replacement before closing to preserve its workspace even when old pane was last.
-    const created=await herdr.call('tab.create',{workspace_id:current.workspace_id,cwd,label:'Restart',focus:false});
+    const name=agentInfo?.name||`remote-${Date.now().toString(36)}`;
+    const created=await herdr.call('tab.create',{workspace_id:current.workspace_id,cwd,label:'Restart',focus:false,agent_kind:current.agent,agent_name:name});
     const replacement=created.root_pane.pane_id;
     try { await herdr.call('pane.close',{pane_id:id}); }
     catch(e) { await herdr.call('pane.close',{pane_id:replacement}).catch(()=>{}); throw e; }
-    try { await launcher.startAgent(replacement,current.agent,agentInfo?.name||`remote-${Date.now().toString(36)}`); }
+    try { await launcher.startAgent(replacement,current.agent,name,created.agent_started===true); }
     catch(e) { e.message+=` Replacement pane ${replacement} was retained; refresh to inspect it.`;e.paneId=replacement;throw e; }
     launcher.rememberDirectory(cwd);
     return {paneId:replacement};

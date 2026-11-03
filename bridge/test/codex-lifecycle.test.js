@@ -225,3 +225,11 @@ test('session ID traversal returns unknown when the entry budget cannot exclude 
   for (let i = 0; i < 10000; i++) fs.writeFileSync(path.join(folder, `entry-${i}`), '');
   assert.equal(readCodexLifecycle(idSession, f.home), null);
 });
+
+test('0.165+ additional_tools and configuration_update items are turn content, not boundaries', t => {
+  const item = type => JSON.stringify({type: 'response_item', payload: {type}});
+  const active = fixture(t, [event('task_started'), item('additional_tools'), item('configuration_update')]);
+  assert.equal(readCodexLifecycle(active.session, active.home).state, 'active');
+  const done = fixture(t, [event('task_started'), item('additional_tools'), item('configuration_update'), event('task_complete')]);
+  assert.equal(readCodexLifecycle(done.session, done.home).state, 'complete');
+});

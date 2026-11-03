@@ -7,13 +7,13 @@ An Android companion for [Herdr](https://github.com/herdrdev/herdr). Read agent 
 ## Quick start
 
 1. Install the [Android APK](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) on your phone (Android 8.0+).
-2. Install [Herdr](https://github.com/herdrdev/herdr) and your coding agents on your Linux PC. This release is tested with Herdr 0.9.1.
+2. Install [Herdr](https://github.com/herdrdev/herdr) and your coding agents on your Linux PC. This release is tested with Herdr 0.9.1 and the Herdr desktop app (herdr-core 0.1.17).
 3. Follow [laptop setup](docs/setup.md) to set up the companion and display your pairing QR.
 4. In the app, tap **Scan laptop QR** and scan the code shown on your PC.
 
 The setup guide covers the PC requirements and connection steps. The standard APK uses QR pairing; [cloud features](portal/README.md) are optional.
 
-Version **0.8.46 (81)** installs as `dev.herdr.remote.community` and updates community 0.8.45 in place. The matching laptop companion is 0.8.46 (sequence 83). An older community APK with a different signer requires a fresh installation and pairing. See [release verification](docs/releases.md).
+Version **0.8.48 (83)** installs as `dev.herdr.remote.community` and updates community 0.8.46 in place. The matching laptop companion is 0.8.48 (sequence 85). It also shows and controls sessions from the Herdr desktop app next to Herdr TUI sessions; see [Herdr desktop app backend](docs/herdr-app-backend.md). An older community APK with a different signer requires a fresh installation and pairing. See [release verification](docs/releases.md).
 
 ## What works
 
