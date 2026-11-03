@@ -34,9 +34,7 @@ data class RemoteState(
   val sentPrompts: Map<String, List<String>> = emptyMap(), val lastPromptAt: Map<String, Long> = emptyMap(),
   val outputTruncated: Boolean = false, val outputRevision: Long = -1,
   val terminalAttachmentId: String? = null, val outputSource: String = "recent_unwrapped",
-  val agentModelMenu: CodexModelMenu? = null, val modelMenuPending: Boolean = false, val currentModel: String? = null,
-  val question: BridgeQuestion? = null, val questionReviewAvailable: Boolean = false,
-  val questionPending: Boolean = false, val outputReady: Boolean = true,
+  val outputReady: Boolean = true,
   val attentionIds: Set<String> = emptySet(), val unreadIds: Set<String> = emptySet(),
   val diagnostics: JsonObject? = null, val diagnosticsLoading: Boolean = false,
   val attachmentStorage: JsonObject? = null, val attachmentsLoading: Boolean = false,
@@ -574,12 +572,6 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         val selected = _state.value.selectedId
         val nextSelection = paneSelection.reconcile(selected, next)
         val closed = selected != null && nextSelection == null
-        if (closed || !next.herdrOnline || next.stale) {
-            outputReader.modelMenuRequest = null
-            outputReader.dismissedModelMenuId = null
-            outputReader.questionRequest = null
-            outputReader.dismissedQuestionId = null
-        }
         if (closed) { outputReader.cancel() }
         val attention = next.panes.filter { it.hasUnacknowledgedAttention() }.map { it.id }.toSet()
         val unread = attentionTracker.accept(next, selected)
@@ -590,12 +582,6 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
             reviewLoading = !closed && it.reviewLoading,
             sentPrompts = it.sentPrompts.filterKeys { id -> next.panes.any { pane -> pane.id == id } },
             lastPromptAt = it.lastPromptAt.filterKeys { id -> next.panes.any { pane -> pane.id == id } },
-            question = if (closed || !next.herdrOnline || next.stale) null else it.question,
-            questionReviewAvailable = !closed && next.herdrOnline && !next.stale && it.questionReviewAvailable,
-            questionPending = !closed && next.herdrOnline && !next.stale && it.questionPending,
-            agentModelMenu = if (closed || !next.herdrOnline || next.stale) null else it.agentModelMenu,
-            modelMenuPending = if (closed || !next.herdrOnline || next.stale) false else it.modelMenuPending,
-            currentModel = if (closed || !next.herdrOnline) null else it.currentModel,
             outputTruncated = if (closed) false else it.outputTruncated,
             outputRevision = if (closed || !next.herdrOnline || next.stale) -1 else it.outputRevision,
             terminalAttachmentId = if (closed || !next.herdrOnline || next.stale) null else it.terminalAttachmentId,
@@ -614,17 +600,13 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
     }
     fun select(id: String?) {
         if (id != null && _state.value.snapshot.panes.none { it.id == id }) return
-        outputReader.modelMenuRequest = null
-        outputReader.dismissedModelMenuId = null
         wakePolling()
         files.clearProjectFiles()
         _state.update { it.copy(review = null, reviewLoading = false,
             structuredHistory = null, historyLoading = false, historyError = null) }
         paneSelection.selected()
         if (id != null) attentionTracker.read(id)
-        outputReader.questionRequest = null
-        outputReader.dismissedQuestionId = null
-        _state.update { it.copy(selectedId = id, question = null, questionReviewAvailable = false, questionPending = false, agentModelMenu = null, modelMenuPending = false, currentModel = null, outputReady = id == null, output = "", outputTruncated = false, outputRevision = -1, terminalAttachmentId = null, unreadIds = id?.let { pane -> it.unreadIds - pane } ?: it.unreadIds) }
+        _state.update { it.copy(selectedId = id, outputReady = id == null, output = "", outputTruncated = false, outputRevision = -1, terminalAttachmentId = null, unreadIds = id?.let { pane -> it.unreadIds - pane } ?: it.unreadIds) }
         outputReader.cancel(); outputReader.begin()
         if (id != null && outputVisible && _state.value.online &&
             _state.value.snapshot.panes.any { it.id == id && it.kind != "terminal" }) loadHistory()
@@ -715,78 +697,6 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
             throw error
         }
     }
-    fun reviewQuestion() = questionAction("question-review")
-    /** Submit only the displayed live question; a native dispatch is not agent completion. */
-    fun answerQuestion(questionId: String, option: Int?, answerText: String? = null) =
-        questionAction("answer", questionId, option, answerText)
-    fun cancelQuestion(questionId: String) = questionAction("answer", questionId, cancel = true)
-    private fun questionAction(operation: String, questionId: String? = null, option: Int? = null, answerText: String? = null, cancel: Boolean = false) = action {
-        val paneId = requireNotNull(_state.value.selectedId)
-        val navigation = paneSelection.generation
-        requireActivePane(paneId)
-        require(paneSelection.generation == navigation) { "The selected conversation changed. Review its question again." }
-        requireDeliverySettled(paneId)
-        val current = _state.value
-        require(questionPaneReady(current, paneId)) {
-            "Reconnect to this agent terminal with control access before reviewing its question."
-        }
-        val question = current.question
-        if (operation == "question-review") {
-            require(current.questionReviewAvailable && question == null) { "No queued question is visible. Refresh the terminal." }
-        } else {
-            require(question != null && question.isValid() && question.id == questionId) { "This question changed. Refresh before answering." }
-            require(if (cancel) question.cancelAvailable && option == null && answerText == null
-                else if (question.stage == "text") option == null && answerText != null && validQuestionAnswer(answerText)
-                else answerText == null && option in question.options.indices) { "Choose a displayed option or enter an answer." }
-        }
-        val attachmentId = requireTerminalAttachment(paneId)
-        val body = buildJsonObject {
-            put("attachmentId", attachmentId)
-            questionId?.let { put("questionId", it) }
-            option?.let { put("option", it) }
-            answerText?.trim()?.let { put("text", it) }
-            if (cancel) put("cancel", true)
-        }
-        val api = requireBridge(); val generation = connectionGeneration; val receipt = operationId()
-        beginDelivery(paneId, receipt, when {
-            operation == "question-review" -> "Opening question…"
-            cancel -> "Cancelling question…"
-            question?.stage == "text" -> "Sending answer…"
-            else -> "Sending choice…"
-        }, operation = "question.$operation")
-        var dispatchStarted = false
-        try {
-            flushPersistAndWait()
-            if (generation != connectionGeneration || api !== bridge || _state.value.selectedId != paneId || paneSelection.generation != navigation) {
-                setDelivery(paneId, receipt, "failed", "Not sent; the connection or selected pane changed.", operation = "question.$operation")
-                return@action
-            }
-            require(requireTerminalAttachment(paneId) == attachmentId) { "The terminal changed. Refresh before answering." }
-            val fresh = _state.value
-            require(questionPaneReady(fresh, paneId)) { "Terminal control changed. Refresh before answering." }
-            if (questionId != null) require(fresh.question == question) { "The question changed before sending. Refresh it." }
-            else require(fresh.questionReviewAvailable && fresh.question == null) { "The queued question changed. Refresh it." }
-            dispatchStarted = true
-            api.call(listOf("v1", "panes", paneId, operation), "POST", body, receipt)
-            if (generation != connectionGeneration || api !== bridge) return@action
-            setDelivery(paneId, receipt, "delivered", "Question action dispatched. Check the terminal.", operation = "question.$operation")
-            if (_state.value.selectedId != paneId || paneSelection.generation != navigation) return@action
-            outputReader.questionRequest = paneId to android.os.SystemClock.elapsedRealtime()
-            outputReader.dismissedQuestionId = questionId
-            _state.update { it.copy(question = null, questionReviewAvailable = false, questionPending = true) }
-            runCatching { outputReader.read() }.onFailure { if (it is CancellationException) throw it }
-        } catch (error: CancellationException) { throw error
-        } catch (error: Exception) {
-            if (generation != connectionGeneration || api !== bridge) return@action
-            outputReader.questionRequest = null
-            _state.update { if (it.selectedId == paneId && paneSelection.generation == navigation)
-                it.copy(question = null, questionReviewAvailable = false, questionPending = false) else it }
-            val uncertain = dispatchStarted && isUncertain(error)
-            setDelivery(paneId, receipt, if (uncertain) "uncertain" else "failed",
-                if (uncertain) "Question action may have been sent. Check its receipt before trying again." else (error.message ?: "Question action was not sent."), operation = "question.$operation")
-            throw error
-        }
-    }
     fun control(operation: String) = action {
         val id = _state.value.selectedId ?: return@action
         requireActivePane(id)
@@ -818,78 +728,6 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         val next = api.snapshot()
         if (generation != connectionGeneration || api !== bridge) return@action
         applySnapshot(next)
-    }
-    fun openAgentModelMenu() = agentModelAction("model")
-    fun selectAgentModel(menuId: String, option: Int) = agentModelAction("model-select", menuId, option)
-    fun cancelAgentModelMenu(menuId: String) = agentModelAction("model-cancel", menuId)
-    fun agentModelKey(menuId: String, key: String) = agentModelAction("model-key", menuId, key = key)
-    fun dismissAgentModelMenuLocally() {
-        outputReader.dismissedModelMenuId = _state.value.agentModelMenu?.id
-        outputReader.modelMenuRequest = null
-        _state.update { it.copy(agentModelMenu = null, modelMenuPending = false,
-            message = "Model menu dismissed on phone. Check the terminal before sending other input.") }
-    }
-    private fun agentModelAction(operation: String, menuId: String? = null, option: Int? = null, key: String? = null) = action {
-        val id = requireNotNull(_state.value.selectedId)
-        requireActivePane(id)
-        val current = _state.value
-        require(current.selectedId == id) { "Not sent; the selected pane changed." }
-        val pane = current.snapshot.panes.find { it.id == id }
-        require(supportsModelSelection(current.snapshot, pane)) { "Update the laptop bridge to change this agent’s model." }
-        require(current.snapshot.canControl && current.online && current.snapshot.herdrOnline && !current.snapshot.stale) {
-            "Reconnect with control access before changing models."
-        }
-        val attachmentId = requireTerminalAttachment(id)
-        if (menuId == null) {
-            if (current.agentModelMenu != null || current.modelMenuPending) { outputReader.read(); return@action }
-            require(pane?.status in setOf("idle", "done") && current.question == null && !current.questionReviewAvailable && !current.questionPending) { "Wait for the agent to finish or answer its question before changing models." }
-        }
-        else {
-            val menu = requireNotNull(current.agentModelMenu) { "This model menu closed. Open Change model again." }
-            require(menu.id == menuId && menu.isValid()) { "The model menu changed. Use the current options." }
-            require(key == null || (menu.provider == "opencode" && key in setOf("up", "down"))) { "Use the model menu controls." }
-            require(option == null || (menu.mode == "options" && option in menu.options.indices)) { "Choose one of the displayed options." }
-        }
-        val api = requireBridge(); val generation = connectionGeneration; val receipt = operationId()
-        val body = buildJsonObject { put("attachmentId", attachmentId); menuId?.let { put("menuId", it) }; option?.let { put("option", it) }; key?.let { put("key", it) } }
-        beginDelivery(id, receipt, "Sending model action…", operation = operation)
-        var dispatchStarted = false
-        try {
-            flushPersistAndWait()
-            if (generation != connectionGeneration || api !== bridge || _state.value.selectedId != id) {
-                setDelivery(id, receipt, "failed", "Not sent; the connection or selected pane changed.", operation = operation)
-                return@action
-            }
-            require(requireTerminalAttachment(id) == attachmentId) { "The terminal changed. Refresh before changing models." }
-            dispatchStarted = true
-            api.call(listOf("v1", "panes", id, operation), "POST", body, receipt)
-            if (generation != connectionGeneration || api !== bridge || _state.value.selectedId != id) return@action
-            if (operation == "model" || operation == "model-key") outputReader.dismissedModelMenuId = null
-            else outputReader.dismissedModelMenuId = menuId
-            outputReader.modelMenuRequest = if (operation == "model-cancel") null else id to android.os.SystemClock.elapsedRealtime()
-            _state.update { it.copy(agentModelMenu = if (operation == "model-key") it.agentModelMenu else null,
-                modelMenuPending = operation == "model") }
-            setDelivery(id, receipt, "delivered", "Model action dispatched. Check the terminal.", operation = operation)
-            runCatching { outputReader.read() }.onFailure { if (it is CancellationException) throw it }
-            _state.update { it.copy(message = when (operation) {
-                "model" -> if (it.agentModelMenu == null) "Opening model choices…" else null
-                "model-cancel" -> if (it.agentModelMenu == null) "Model menu closed." else null
-                else -> if (it.agentModelMenu == null) "Selection sent. Check the terminal for confirmation." else null
-            }) }
-        } catch (cancelled: CancellationException) { throw cancelled
-        } catch (error: Exception) {
-            if (generation != connectionGeneration || api !== bridge) return@action
-            outputReader.modelMenuRequest = null
-            outputReader.dismissedModelMenuId = menuId
-            _state.update { it.copy(agentModelMenu = null, modelMenuPending = false) }
-            val uncertain = dispatchStarted && isUncertain(error)
-            setDelivery(id, receipt, if (uncertain) "uncertain" else "failed",
-                if (uncertain) "Model action delivery is uncertain. Inspect the terminal before trying again."
-                else (error.message ?: "Model action was not sent."), operation = operation)
-            // Keep the prompt draft and its delivery receipt intact. Never retry a model mutation.
-            runCatching { outputReader.read() }.onFailure { if (it is CancellationException) throw it }
-            throw if (uncertain) java.io.IOException("Model action delivery is uncertain. Check the live menu before trying again.", error) else error
-        }
     }
     fun renamePane(id: String, title: String) = sessionAction(id, "rename", buildJsonObject { put("title", title.trim()) })
     fun focusPane(id: String) = sessionAction(id, "focus")
@@ -970,6 +808,8 @@ class RemoteModel(app: Application): AndroidViewModel(app) {
         }
         require(current.selectedId != id || _state.value.selectedId == id) { "Not sent; the selected pane changed." }
     }
+    /** The current laptop connection for the live terminal; it keeps its own stream and control session. */
+    fun liveBridge(): Bridge? = bridge
     private fun requireBridge() = requireNotNull(bridge) { "Pair this device first." }
     private fun requireTerminalAttachment(id: String): String = delivery.terminalAttachment(id)
     private fun operationId(): String = delivery.operationId()

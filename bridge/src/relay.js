@@ -35,19 +35,33 @@ function createReplayGuard(store,now,limit) {
   }
   return {accept,close(){}};
 }
+// The portal closes the laptop socket for every phone above 2,400 messages or
+// 32 MiB per minute. Live terminal polls back off first, then reads; actions keep a reserve.
+const SOCKET_BUDGET={stream:{bytes:20*1024*1024,messages:1600},read:{bytes:28*1024*1024,messages:2100},action:{bytes:31*1024*1024,messages:2350}};
+const STREAM_POLL=/^\/v1\/panes\/[^/]+\/stream$/;
 export function createRelayHandler({identity,port,fetchImpl=fetch,now=Date.now,transfers,store,routing,replayLimit=MAX_REPLAY_IDS}){
-  const replay=createReplayGuard(store,now,replayLimit);let active=0;
+  const replay=createReplayGuard(store,now,replayLimit);let active=0,polls=0;
+  const usage={windowStart:now(),bytes:0,messages:0};
+  const budget=tier=>{
+    if(now()-usage.windowStart>=60000){usage.windowStart=now();usage.bytes=0;usage.messages=0;}
+    return usage.bytes<SOCKET_BUDGET[tier].bytes&&usage.messages<SOCKET_BUDGET[tier].messages;
+  };
+  const counted=envelope=>{usage.messages++;usage.bytes+=Buffer.byteLength(JSON.stringify(envelope));return envelope;};
   const handler=async (envelope,capability)=>{
     if(envelope?.v!==1||typeof envelope.id!=='string'||!/^[a-f0-9-]{36}$/i.test(envelope.id))throw Error('Invalid envelope');
     const key=deriveKey(identity.privateKey,envelope.epk,identity.id,envelope.id);
     const req=decryptPayload(key,identity.id,envelope);
     if(!Number.isSafeInteger(req.timestamp)||Math.abs(now()-req.timestamp)>REQUEST_SKEW_MS)throw Error('Request expired');
     replay.accept(envelope.id,req.method!=='GET');
-    const response=value=>encryptPayload(key,identity.id,envelope.id,value);
+    const response=value=>counted(encryptPayload(key,identity.id,envelope.id,value));
     const error=(status,message)=>response({status,headers:{'content-type':'application/json'},body:Buffer.from(JSON.stringify({error:{code:'relay_error',message}})).toString('base64url')});
     if(routing&&!routing.check(capability,req))return error(403,'Routing capability does not authorize this request.');
-    if(active>=8)return error(429,'Laptop is busy. Try again.');
-    active++;
+    // At most three held live-terminal polls, so five relay slots always remain for everything else.
+    const poll=req.method==='GET'&&typeof req.path==='string'&&STREAM_POLL.test(req.path.split('?')[0]);
+    const tier=poll?'stream':req.method==='GET'?'read':'action';
+    if(!budget(tier))return error(429,'The relay is busy for this laptop. Try again shortly.');
+    if(active>=8||(poll&&polls>=3))return error(429,'Laptop is busy. Try again.');
+    active++;if(poll)polls++;
     try{
       if(!['GET','POST','PUT','PATCH','DELETE'].includes(req.method)||typeof req.path!=='string'||req.path.length>4096||!req.path.startsWith('/v1/')||/[\\\r\n#]/.test(req.path))return error(400,'Invalid request');
       const url=new URL(req.path,`http://127.0.0.1:${port}`);
@@ -66,7 +80,7 @@ export function createRelayHandler({identity,port,fetchImpl=fetch,now=Date.now,t
       };
       const out=req.method==='POST'&&url.pathname==='/v1/pair'&&routing?await routing.pair(capability,body,dispatch,Object.entries(req.headers||{}).find(([name])=>name.toLowerCase()==='x-pairing-nonce')?.[1]):await dispatch();
       return response({status:out.status,headers:out.headers,body:out.body??out.bytes.toString('base64url')});
-    }catch{return error(502,req.method==='GET'?'The laptop could not complete this request.':'The connection failed. This action may have completed; check its status before retrying.');}finally{active--;}
+    }catch{return error(502,req.method==='GET'?'The laptop could not complete this request.':'The connection failed. This action may have completed; check its status before retrying.');}finally{active--;if(poll)polls--;}
   };
   handler.close=replay.close;
   return handler;

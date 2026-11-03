@@ -23,7 +23,7 @@ class UncertainDeliveryUiTest {
             online = true,
             selectedId = pane.id,
             snapshot = Snapshot(herdrOnline = true, panes = listOf(pane), terminalInputEnabled = true,
-                canControl = true, agentModelSelectionEnabled = true, modelSelectionAgents = listOf("codex")),
+                canControl = true),
             terminalAttachmentId = "fresh-attachment",
             outputReady = true,
             drafts = mapOf(pane.id to "Repeat prompt"),
@@ -32,14 +32,13 @@ class UncertainDeliveryUiTest {
         var prompts = 0
         var keys = 0
         var inserts = 0
-        var modelActions = 0
         var acknowledgements = 0
         compose.setContent {
             HerdrTheme {
                 TerminalLiveView(screen, pane,
                     onDraft = {}, onInsert = { inserts++ }, onPrompt = { prompts++ }, onKey = { keys++ },
                     onRefresh = {}, onAttach = {}, onRemoveAttachment = {}, onManageAttachments = {},
-                    onBrowseFiles = {}, onCheckDelivery = {}, onChangeModel = { modelActions++ },
+                    onBrowseFiles = {}, onCheckDelivery = {},
                     onAcknowledgeDelivery = { id ->
                         acknowledgements++
                         screen = screen.acknowledgeUncertainDelivery(id)
@@ -51,7 +50,6 @@ class UncertainDeliveryUiTest {
         compose.onNodeWithContentDescription("Send prompt").assertIsNotEnabled()
         compose.onNodeWithText("Insert text").assertIsNotEnabled()
         compose.onNodeWithText("Enter").assertIsNotEnabled()
-        compose.onNodeWithText("Model").assertIsNotEnabled()
 
         compose.onNodeWithText("I checked the laptop").performClick()
         compose.onNodeWithText("Keep waiting").performClick()
@@ -64,13 +62,12 @@ class UncertainDeliveryUiTest {
         compose.runOnIdle {
             assertEquals(1, acknowledgements)
             assertEquals("first-id", screen.deliveries[pane.id]?.id)
-            assertEquals(0, prompts + keys + inserts + modelActions)
+            assertEquals(0, prompts + keys + inserts)
         }
 
         compose.onNodeWithContentDescription("Send prompt").assertIsEnabled()
         compose.onNodeWithText("Insert text").assertIsEnabled()
         compose.onNodeWithText("Enter").assertIsEnabled()
-        compose.onNodeWithText("Model").assertIsEnabled()
         compose.onNodeWithContentDescription("Send prompt").performClick()
         compose.runOnIdle { assertEquals(1, prompts) }
     }

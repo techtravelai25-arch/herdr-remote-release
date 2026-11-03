@@ -14,23 +14,18 @@ import {reject,text,respond,writeDownloadHead,paneParam,onlyParams} from './http
 
 const kinds=new Set(['codex','claude','opencode']);
 const keys=new Set(['enter','esc','tab','up','down','left','right','ctrl+c','alt+up']);
-const actions=/^\/v1\/panes\/([^/]+)(?:\/(output|history|files|prompt|input|keys|stop|restart|rename|focus|review|attachments|answer|question-review|model|model-select|model-cancel|model-key))?$/;
-const questionActions=['question-review','answer'];
-const modelActions=['model','model-select','model-cancel','model-key'];
+const actions=/^\/v1\/panes\/([^/]+)(?:\/(output|history|files|prompt|input|keys|stop|restart|rename|focus|review|attachments|control|stream|stream-input))?$/;
 const inputActions=['prompt','input','keys','stop','restart','rename','focus'];
 
 /** Pane-scoped HTTP endpoints: output, history, files, previews and pane actions. */
 export function createPaneRoutes(ctx) {
-  const {config,store,herdr,history,attachments,operations,push,htmlPreview,menus,paneAttachments,launcher}=ctx;
+  const {config,store,herdr,history,attachments,operations,push,htmlPreview,paneAttachments,launcher}=ctx;
   const {pane,locked}=ctx;
-  async function dispatchInput(target,send,guard='always') {
-    const startedAt=Date.now();
-    const cancel=guard==='none'?()=>{}:ctx.inputStarted(target,startedAt,guard==='completed');
-    try {
-      const result=await send();
-      ctx.acceptedInput(target,startedAt);
-      return result;
-    } catch(error) {cancel();throw error;}
+  // Herdr reports the agent's status itself; accepted input only marks recent activity.
+  async function dispatchInput(target,send) {
+    const result=await send();
+    ctx.acceptedInput(target);
+    return result;
   }
   async function preview(req,res,url,device,match) {
     const paneId=paneParam(match[1]);
@@ -60,9 +55,7 @@ export function createPaneRoutes(ctx) {
   }
   async function output(device,id) {
     const current=await pane(id);
-    const menuFields=await menus.observe(device.deviceId,id,current,ctx.locks.has(id));
-    // Recent output is passive and bounded. It cannot authorize input;
-    // guarded question controls use the separate current visible read.
+    // Recent output is passive and bounded. It cannot authorize input.
     const result=await herdr.call('pane.read',{pane_id:id,source:'recent_unwrapped',format:'ansi',strip_ansi:false,lines:300});
     const fresh=await pane(id);
     let attachmentId=null;
@@ -71,7 +64,7 @@ export function createPaneRoutes(ctx) {
       attachmentId=paneAttachments.attach(device.deviceId,fresh);
     }
     return boundedOutput({text:stripVTControlCharacters(result.read.text),revision:result.read.revision,truncated:result.read.truncated,
-      source:'recent_unwrapped',attachmentId,currentModel:null,...menuFields});
+      source:'recent_unwrapped',attachmentId,currentModel:null,question:null,codexModelMenu:null,agentModelMenu:null});
   }
   async function readHistory(url,id) {
     onlyParams(url,['cursor','revision'],'invalid_path','Use one history cursor and optional revision.');
@@ -82,49 +75,13 @@ export function createPaneRoutes(ctx) {
       reject('history_changed','The conversation changed. Refresh history.',409);
     return result;
   }
-  function questionAction(req,device,id,action,b) {
-    const operationId=operationInput(req,b);
-    const allowed=action==='question-review'?['operationId','attachmentId']:['operationId','attachmentId','questionId','option','text','cancel'];
-    if(Object.keys(b).some(key=>!allowed.includes(key))) reject('invalid_question','Unsupported question action.');
-    if(action==='answer'&&(
-      typeof b.questionId!=='string'||!/^[a-f0-9]{64}$/.test(b.questionId)||
-      ['option','text','cancel'].filter(key=>key in b).length!==1||
-      ('option' in b && (!Number.isInteger(b.option)||b.option<0||b.option>32)) ||
-      ('text' in b && (typeof b.text!=='string'||b.text.length<1||b.text.length>500))||
-      ('cancel' in b && b.cancel!==true)))
-      reject('invalid_question','Refresh the question and choose one visible answer.');
-    const input={paneId:id,questionId:b.questionId??null,option:b.option??null,text:b.text??null,cancel:b.cancel??null};
-    return operations.run(device.deviceId,operationId,`pane.${action}`,input,()=>locked(id,async()=>{
-      const current=await pane(id);
-      paneAttachments.validate(device.deviceId,current,b.attachmentId);
-      return menus.questionAction(action,device.deviceId,id,current,b);
-    }));
-  }
-  function modelAction(req,device,id,action,b) {
-    const operationId=operationInput(req,b);
-    const allowed=action==='model'?['operationId','attachmentId']:action==='model-select'?['operationId','attachmentId','menuId','option']
-      :action==='model-key'?['operationId','attachmentId','menuId','key']:['operationId','attachmentId','menuId'];
-    if(Object.keys(b).some(key=>!allowed.includes(key))) reject('invalid_model_selection','Unsupported model selection input.');
-    if(action!=='model'&&(typeof b.menuId!=='string'||!/^[a-f0-9]{64}$/.test(b.menuId))) reject('invalid_model_selection','Refresh the model choices before continuing.');
-    if(action==='model-select'&&(!Number.isInteger(b.option)||b.option<0||b.option>99)) reject('invalid_model_selection','Choose a visible model option.');
-    if(action==='model-key'&&!['up','down'].includes(b.key)) reject('invalid_model_selection','Choose a supported model navigation key.');
-    // Every mutation revalidates the device, the pane attachment, the pane
-    // identity/status and the live menu identity before any key is sent.
-    // Receipts keep uncertain delivery inspectable, never auto-retried.
-    const input={paneId:id,menuId:b.menuId??null,option:b.option??null,key:b.key??null};
-    return operations.run(device.deviceId,operationId,`pane.${action}`,input,()=>locked(id,async()=>{
-      const current=await pane(id);
-      paneAttachments.validate(device.deviceId,current,b.attachmentId);
-      return menus.modelAction(action,device.deviceId,id,current,b);
-    }));
-  }
   async function sendKeys(device,id,action,b) {
     if(action==='keys'&&(!Array.isArray(b.keys)||b.keys.length!==1||b.keys.some(k=>!keys.has(k)))) reject('invalid_keys','Choose one supported key.');
     const target=await pane(id);
     paneAttachments.validate(device.deviceId,target,b.attachmentId);
     if(!target.agent) requireAccess(store,device,'terminal',config);
-    return dispatchInput(target,()=>herdr.call('pane.send_keys',{pane_id:id,keys:action==='stop'?['ctrl+c']:b.keys}),
-      action==='keys'&&b.keys.includes('enter')?'completed':'none');
+    return dispatchInput(target,()=>action==='stop'?herdr.call('pane.interrupt',{pane_id:id})
+      :herdr.call('pane.send_keys',{pane_id:id,keys:b.keys}));
   }
   async function prompt(device,id,current,b,completion,attention) {
     paneAttachments.validate(device.deviceId,current,b.attachmentId);
@@ -175,7 +132,7 @@ export function createPaneRoutes(ctx) {
       if(!current.agent) requireAccess(store,device,'terminal',config);
       if(typeof b.text!=='string'||!b.text.length||b.text.length>16000||/[\u0000-\u0008\u000b-\u001f\u007f]/.test(b.text))
         reject('invalid_input','Enter up to 16000 characters of terminal text without control characters.');
-      return dispatchInput(current,()=>herdr.call('pane.send_input',{pane_id:id,text:b.text}),b.text.includes('\n')?'completed':'none');
+      return dispatchInput(current,()=>herdr.call('pane.send_input',{pane_id:id,text:b.text}));
     }
     return restart(id,current);
   }
@@ -201,13 +158,16 @@ export function createPaneRoutes(ctx) {
       return respond(res,200,listProjectFiles(config,current.foreground_cwd||current.cwd,url.searchParams.get('directory')??'',url.searchParams.get('cursor')));
     }
     if(req.method==='GET'&&action==='history') return respond(res,200,await readHistory(url,id));
+    // Live terminal: watching, taking control and typing. Not durable receipts: input is sequence-numbered instead.
+    if(req.method==='GET'&&action==='stream') return respond(res,200,await ctx.paneControl.poll(req,url,device,id));
+    if(req.method==='POST'&&action==='control') return respond(res,200,await ctx.paneControl.takeControl(device,id,await body(req)));
+    if(req.method==='DELETE'&&action==='control') return respond(res,200,ctx.paneControl.releaseControl(device,id));
+    if(req.method==='POST'&&action==='stream-input') return respond(res,200,await ctx.paneControl.input(req,device,id,await body(req)));
     if(req.method==='GET'&&action==='attachments') return respond(res,200,attachments.list(device.deviceId,id));
     if(req.method==='GET'&&action==='review') {
       const current=await pane(id); return respond(res,200,await reviewProject(config,current.foreground_cwd||current.cwd,attachments,device.deviceId,id));
     }
     if(req.method==='GET'&&action==='output') return respond(res,200,await output(device,id));
-    if(req.method==='POST'&&questionActions.includes(action)) return respond(res,200,await questionAction(req,device,id,action,await body(req)));
-    if(req.method==='POST'&&modelActions.includes(action)) return respond(res,200,await modelAction(req,device,id,action,await body(req)));
     if(req.method==='POST'&&action==='attachments') {
       const result=await locked(id,async()=>attachments.upload(req,await pane(id),id,device.deviceId,()=>pane(id)));
       return respond(res,201,result);

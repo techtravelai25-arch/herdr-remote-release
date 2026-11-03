@@ -67,12 +67,14 @@ internal fun parseBridgeResponse(response: Response): JsonObject {
 
 @Serializable data class Workspace(val id: String, val label: String)
 @Serializable data class Project(val id: String, val label: String)
-@Serializable data class Pane(val id: String, val workspaceId: String, val tabId: String = "", val title: String = "Terminal", val cwd: String = "", val kind: String = "terminal", val status: String = "unknown", val lastActivity: String? = null, val revision: Long = 0, val projectId: String? = null, val projectLabel: String? = null, val completionEventId: String? = null, val completionAcknowledged: Boolean = false, val acknowledgedCompletionEventIds: List<String> = emptyList(), val attentionEventId: String? = null, val attentionAcknowledged: Boolean = false, val acknowledgedAttentionEventIds: List<String> = emptyList())
-@Serializable data class Snapshot(val herdrOnline: Boolean = false, val hostname: String = "Laptop", val workspaces: List<Workspace> = emptyList(), val panes: List<Pane> = emptyList(), val panesComplete: Boolean = false, val projects: List<Project> = emptyList(), val error: String? = null, val allowTerminalInput: Boolean = false, val canStartHerdr: Boolean = false, val attachmentsEnabled: Boolean = false, val reviewEnabled: Boolean = false, val sessionResumeSupported: Boolean = false, val directoryBrowsingEnabled: Boolean = false, val terminalCreationEnabled: Boolean = false, val terminalInputEnabled: Boolean = false, val terminalSnapshotSource: String? = null, val codexModelSelectionEnabled: Boolean = false, val agentModelSelectionEnabled: Boolean = false, val modelSelectionAgents: List<String> = emptyList(), val sessionRenameEnabled: Boolean = false, val desktopHandoffEnabled: Boolean = false, val structuredHistoryEnabled: Boolean = false, val activityTimelineEnabled: Boolean = false, val permissionMode: String = "normal", val canControl: Boolean = true, val lastUpdatedAt: String? = null, val stale: Boolean = false, val usage: List<ProviderUsage> = emptyList(), val questionSelectionEnabled: Boolean = false)
+@Serializable data class Pane(val id: String, val workspaceId: String, val tabId: String = "", val title: String = "Terminal", val cwd: String = "", val kind: String = "terminal", val status: String = "unknown", val lastActivity: String? = null, val revision: Long = 0, val projectId: String? = null, val projectLabel: String? = null, val activity: String? = null, val progress: Int? = null, val blockedKind: String? = null, val turn: Long? = null, val completionEventId: String? = null, val completionAcknowledged: Boolean = false, val acknowledgedCompletionEventIds: List<String> = emptyList(), val attentionEventId: String? = null, val attentionAcknowledged: Boolean = false, val acknowledgedAttentionEventIds: List<String> = emptyList())
+@Serializable data class Snapshot(val herdrOnline: Boolean = false, val hostname: String = "Laptop", val workspaces: List<Workspace> = emptyList(), val panes: List<Pane> = emptyList(), val panesComplete: Boolean = false, val projects: List<Project> = emptyList(), val error: String? = null, val allowTerminalInput: Boolean = false, val canStartHerdr: Boolean = false, val attachmentsEnabled: Boolean = false, val reviewEnabled: Boolean = false, val sessionResumeSupported: Boolean = false, val directoryBrowsingEnabled: Boolean = false, val terminalCreationEnabled: Boolean = false, val terminalInputEnabled: Boolean = false, val terminalSnapshotSource: String? = null, val codexModelSelectionEnabled: Boolean = false, val agentModelSelectionEnabled: Boolean = false, val modelSelectionAgents: List<String> = emptyList(), val sessionRenameEnabled: Boolean = false, val desktopHandoffEnabled: Boolean = false, val structuredHistoryEnabled: Boolean = false, val activityTimelineEnabled: Boolean = false, val permissionMode: String = "normal", val canControl: Boolean = true, val lastUpdatedAt: String? = null, val stale: Boolean = false, val usage: List<ProviderUsage> = emptyList(), val terminalStreamEnabled: Boolean = false)
 @Serializable data class RemoteDirectory(val name: String, val path: String)
 @Serializable data class DirectoryListing(val home: String, val current: String, val parent: String? = null, val directories: List<RemoteDirectory> = emptyList(), val recent: List<RemoteDirectory> = emptyList(), val nextCursor: String? = null)
-@Serializable data class BridgeQuestion(val id: String, val prompt: String, val options: List<String>, val selectedIndex: Int? = null, val freeText: Boolean = false, val stage: String = "choices", val multiSelect: Boolean = false, val selectedOptions: List<Int> = emptyList(), val cancelAvailable: Boolean = false, val kind: String? = null)
-@Serializable data class Output(val text: String = "", val revision: Long = 0, val truncated: Boolean = false, val source: String = "recent_unwrapped", val attachmentId: String? = null, val currentModel: String? = null, val question: BridgeQuestion? = null, val codexModelMenu: CodexModelMenu? = null, val agentModelMenu: CodexModelMenu? = null, val questionReviewAvailable: Boolean = false, val questionAwaitingTransition: Boolean = false)
+@Serializable data class Output(val text: String = "", val revision: Long = 0, val truncated: Boolean = false, val source: String = "recent_unwrapped", val attachmentId: String? = null)
+/** Live terminal bytes after a cursor. A reset starts a new epoch whose first bytes are a complete paint. */
+@Serializable data class StreamChunk(val epoch: String, val seq: Long = 0, val nextSeq: Long = 0, val reset: Boolean = false, val cols: Int = 80, val rows: Int = 24, val ended: String? = null, val data: String = "")
+@Serializable data class ControlSession(val controlId: String, val nextSeq: Long = 1)
 @Serializable data class Credentials(val url: String, val token: String, val deviceId: String, val portalDeviceId: String? = null, val expiresAt: Long? = null, val relayLaptopId: String? = null, val relayPublicKey: String? = null, val relayVersion: Int = 2, val relayRoutingToken: String? = null, val relayRoutingExpires: Long? = null)
 
 /** Only encrypted credentials reach disk. Keys are non-exportable in Android Keystore. */
@@ -136,7 +138,10 @@ class Bridge(
     }
     private val client get() = injectedClient ?: sharedClient
     private fun requestClient(path: List<String>, method: String): OkHttpClient =
-        if (method == "POST" && (path == listOf("v1", "agents") ||
+        // A live-terminal poll is held by the laptop for up to 15 s before it answers.
+        if (method == "GET" && path.size == 4 && path.take(2) == listOf("v1", "panes") && path.last() == "stream")
+            client.newBuilder().readTimeout(40, TimeUnit.SECONDS).callTimeout(45, TimeUnit.SECONDS).build()
+        else if (method == "POST" && (path == listOf("v1", "agents") ||
             (path.size == 4 && path.take(2) == listOf("v1", "panes") && path.last() == "restart"))) {
             // agent.start may wait for the local CLI to finish booting. The
             // bridge keeps its operation receipt while this request is open;
@@ -218,6 +223,18 @@ class Bridge(
         withContext(Dispatchers.IO) { json.decodeFromJsonElement(deserializer, call(path, query = query)) }
     suspend fun snapshot(): Snapshot = fetch(Snapshot.serializer(), listOf("v1", "snapshot"))
     suspend fun output(id: String): Output = fetch(Output.serializer(), listOf("v1", "panes", id, "output"))
+    suspend fun streamPoll(id: String, attachmentId: String, epoch: String?, seq: Long, ack: Long): StreamChunk =
+        fetch(StreamChunk.serializer(), listOf("v1", "panes", id, "stream"), buildMap {
+            put("attachmentId", attachmentId); put("wait", "1"); put("seq", seq.toString()); put("ack", ack.toString())
+            epoch?.let { put("epoch", it) }
+        })
+    suspend fun takeControl(id: String, attachmentId: String, takeover: Boolean): ControlSession = withContext(Dispatchers.IO) {
+        json.decodeFromJsonElement(ControlSession.serializer(), call(listOf("v1", "panes", id, "control"), "POST",
+            buildJsonObject { put("attachmentId", attachmentId); if (takeover) put("takeover", true) }))
+    }
+    suspend fun releaseControl(id: String) { call(listOf("v1", "panes", id, "control"), "DELETE") }
+    suspend fun streamInput(id: String, controlId: String, seq: Long, data: String): JsonObject =
+        call(listOf("v1", "panes", id, "stream-input"), "POST", buildJsonObject { put("controlId", controlId); put("seq", seq); put("data", data) })
     internal fun events(poller: AdaptivePoller = AdaptivePoller(), urgent: () -> Boolean = { false }) = callbackFlow<Snapshot> {
         val auth = resolveCredentials(credentials)
         if (auth.relayLaptopId != null || auth.relayPublicKey != null) {

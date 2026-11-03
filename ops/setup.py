@@ -12,9 +12,8 @@ mode = parser.add_mutually_exclusive_group(required=True)
 mode.add_argument('--output', type=Path, help='render files into a directory for review')
 mode.add_argument('--install', action='store_true', help='install user config, launcher and units; does not enable/start them')
 parser.add_argument('--node', default=shutil.which('node'))
-parser.add_argument('--herdr', default=shutil.which('herdr'))
 parser.add_argument('--cloudflared', default=shutil.which('cloudflared'))
-parser.add_argument('--socket', type=Path)
+parser.add_argument('--socket', type=Path, help='Herdr core socket, only for a non-default core session')
 args = parser.parse_args()
 root = Path(__file__).resolve().parent.parent
 home = Path.home()
@@ -30,7 +29,6 @@ def binary(value, name):
     return str(p.resolve())
 
 node = binary(args.node, 'node')
-herdr = binary(args.herdr, 'herdr')
 cloudflared = binary(args.cloudflared, 'cloudflared') if args.cloudflared else None
 
 def unitquote(value, executable=False):
@@ -43,16 +41,15 @@ def unit(description, command, working, environment=(), restart='on-failure'):
     env = ''.join('Environment=' + unitquote(item) + '\n' for item in environment)
     return f'[Unit]\nDescription={description}\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory={unitquote(working)}\nExecStart={" ".join(unitquote(v, executable=True) for v in command)}\n{env}Restart={restart}\nRestartSec=3\nUMask=0077\nNoNewPrivileges=true\n\n[Install]\nWantedBy=default.target\n'
 
-socket = args.socket or home / '.config/herdr/herdr.sock'
-if not socket.is_absolute():
+if args.socket and not args.socket.is_absolute():
     parser.error('--socket must be absolute')
-data = {'port':8787, 'publicUrl':'', 'socketPath':str(socket), 'stateDir':str(config.parent / 'state'), 'projects':[], 'allowTerminalInput':False, 'allowHerdrStart':False}
+# The bridge uses the Herdr core at $XDG_RUNTIME_DIR/herdr-core/default.sock unless coreSocketPath is set.
+data = {'port':8787, 'publicUrl':'', **({'coreSocketPath':str(args.socket)} if args.socket else {}), 'stateDir':str(config.parent / 'state'), 'projects':[], 'allowTerminalInput':False, 'allowHerdrStart':False}
 launcher = '#!/bin/sh\nexport HERDR_REMOTE_CONFIG=' + shlex.quote(str(config)) + '\nexec ' + shlex.quote(node) + ' ' + shlex.quote(str(root / 'bridge/src/cli.js')) + ' "$@"\n'
 files = {
     config: json.dumps(data, indent=2) + '\n',
     home / '.local/bin/herdr-remote': launcher,
     config_home / 'systemd/user/herdr-remote-bridge.service': unit('Herdr Remote bridge', [node, root / 'bridge/src/cli.js', 'serve'], root / 'bridge', ['HERDR_REMOTE_CONFIG=' + str(config)]),
-    config_home / 'systemd/user/herdr-remote-herdr.service': unit('Herdr session started by Herdr Remote', [herdr, 'server'], home, ['PATH=' + os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')], 'no'),
 }
 if cloudflared:
     files[config_home / 'systemd/user/herdr-remote-quick-tunnel.service'] = unit('Herdr Remote temporary development tunnel', [cloudflared, 'tunnel', '--no-autoupdate', '--url', 'http://127.0.0.1:8787'], home)

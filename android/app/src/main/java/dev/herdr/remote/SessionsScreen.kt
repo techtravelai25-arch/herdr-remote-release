@@ -138,7 +138,7 @@ internal fun featuredDashboardPane(
                     Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
                         Text(if (state.signInRequired) "Open Settings → Laptop & account and sign in again. Your drafts are saved."
                             else if (!state.online) state.connectionError ?: "Reconnecting automatically. Check your phone's network and wake your laptop. Your connection and drafts are saved."
-                            else "Start Herdr to see and control your agents.", style = MaterialTheme.typography.bodyMedium)
+                            else "Open the Herdr app on your laptop to see and control your agents.", style = MaterialTheme.typography.bodyMedium)
                         if (!state.online && state.connectionError != null && !state.signInRequired) {
                             Text("Retrying automatically. Your connection and drafts are saved.", Modifier.padding(top = 6.dp),
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -178,11 +178,11 @@ internal fun featuredDashboardPane(
                     }
                     Box {
                         IconButton(onClick = { groupingMenu = true }) {
-                            Icon(Icons.Default.Tune, "Group sessions · currently by ${if (grouping == SessionGrouping.PROJECT) "project" else "workspace"}")
+                            Icon(Icons.Default.Tune, "Group sessions · currently by ${if (grouping == SessionGrouping.PROJECT) "project" else "Herdr space"}")
                         }
                         DropdownMenu(expanded = groupingMenu, onDismissRequest = { groupingMenu = false }) {
                             SessionGrouping.entries.forEach { option ->
-                                DropdownMenuItem(text = { Text(if (option == SessionGrouping.PROJECT) "Group by project" else "Group by workspace") },
+                                DropdownMenuItem(text = { Text(if (option == SessionGrouping.PROJECT) "Group by project" else "Group by Herdr space") },
                                     modifier = Modifier.semantics { selected = grouping == option },
                                     onClick = {
                                         groupingName = option.name
@@ -308,6 +308,13 @@ internal fun featuredDashboardPane(
             Text(listOfNotNull(kindLabel(pane.kind), project.takeIf { showProject }, workspaceLabel?.takeIf { it.isNotBlank() }).joinToString(" · "), modifier = Modifier.semantics { contentDescription = listOfNotNull(kindLabel(pane.kind), pane.cwd.ifBlank { "Project unavailable" }, workspaceLabel).joinToString(" · ") },
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
+            // What the agent itself says it is doing, from Herdr.
+            pane.activity?.takeIf { !stale }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            pane.progress?.takeIf { !stale && pane.status == "working" }?.let { progress ->
+                LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().padding(top = 2.dp))
+            }
             FlowRow(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 DashboardStatusBadge(pane.status, stale)
                 pane.lastActivity?.let {
@@ -351,8 +358,8 @@ internal fun featuredDashboardPane(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(if (stale) "Check availability" else when (dashboardStatus(pane.status)) {
-                    DashboardStatus.ERROR -> "Session reported an error"
-                    DashboardStatus.BLOCKED -> "Open the conversation to review the blocker"
+                    DashboardStatus.ERROR -> pane.activity ?: "Session reported an error"
+                    DashboardStatus.BLOCKED -> listOfNotNull(blockedLabel(pane.blockedKind), pane.activity).joinToString(": ")
                     else -> if (completion) "Open the completed conversation to review its output" else "Waiting for your input"
                 },
                     modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)

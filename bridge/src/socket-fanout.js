@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import {WebSocketServer,WebSocket} from 'ws';
 import {BridgeError} from './herdr.js';
 import {requireAccess} from './access.js';
@@ -9,7 +10,7 @@ const MAX_SOCKETS=8;
  * re-authenticates each socket's credential, so revocation, an access change
  * or a malformed device record closes only the affected socket.
  */
-export function createSocketFanout({server,store,config,authenticate,authorizeUpgrade,scopedSnapshot,latest,onConnection}) {
+export function createSocketFanout({server,store,config,authenticate,authorizeUpgrade,scopedSnapshot,latest,onConnection,onMessage,onSocketClose}) {
   const wss=new WebSocketServer({noServer:true,maxPayload:1024,perMessageDeflate:false});
   server.on('upgrade',async(req,socket,head)=>{
     try {
@@ -18,8 +19,12 @@ export function createSocketFanout({server,store,config,authenticate,authorizeUp
       if(wss.clients.size>=MAX_SOCKETS) throw new BridgeError('busy','Too many connections.',429);
       if(socket.destroyed)return;
       wss.handleUpgrade(req,socket,head,ws=>{
-        ws.token=token;ws.alive=true;
+        ws.token=token;ws.alive=true;ws.id=randomUUID();
         ws.on('pong',()=>{ws.alive=true;});ws.on('error',()=>{});
+        // Small control messages (live terminal subscribe/ack); maxPayload bounds them to 1 KiB.
+        ws.on('message',raw=>{let message;try{message=JSON.parse(raw);}catch{ws.close(1003,'Invalid message');return;}
+          void Promise.resolve(onMessage?.(ws,message)).catch(()=>{});});
+        ws.on('close',()=>onSocketClose?.(ws));
         wss.emit('connection',ws);
       });
     } catch {socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');}

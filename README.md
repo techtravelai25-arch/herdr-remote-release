@@ -7,22 +7,21 @@ An Android companion for [Herdr](https://github.com/herdrdev/herdr). Read agent 
 ## Quick start
 
 1. Install the [Android APK](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) on your phone (Android 8.0+).
-2. Install [Herdr](https://github.com/herdrdev/herdr) and your coding agents on your Linux PC. This release is tested with Herdr 0.9.1 and the Herdr desktop app (herdr-core 0.1.17).
+2. Install the [Herdr](https://github.com/herdrdev/herdr) desktop app (or only its core, herdr-core) and your coding agents on your Linux PC. This release is tested with herdr-core 0.1.17.
 3. Follow [laptop setup](docs/setup.md) to set up the companion and display your pairing QR.
 4. In the app, tap **Scan laptop QR** and scan the code shown on your PC.
 
 The setup guide covers the PC requirements and connection steps. The standard APK uses QR pairing; [cloud features](portal/README.md) are optional.
 
-Version **0.8.48 (83)** installs as `dev.herdr.remote.community` and updates community 0.8.46 in place. The matching laptop companion is 0.8.48 (sequence 85). It also shows and controls sessions from the Herdr desktop app next to Herdr TUI sessions; see [Herdr desktop app backend](docs/herdr-app-backend.md). An older community APK with a different signer requires a fresh installation and pairing. See [release verification](docs/releases.md).
+Version **0.9.1 (85)** installs as `dev.herdr.remote.community` and updates community 0.8.48 in place. The matching laptop companion is 0.9.1 (sequence 87); update both. Herdr Remote now works only with the Herdr core (herdr-core 0.1, the backend of the Herdr desktop app); the Herdr TUI is no longer supported. See [Herdr backend](docs/herdr-app-backend.md). An older community APK with a different signer requires a fresh installation and pairing. See [release verification](docs/releases.md).
 
 ## What works
 
-- Live terminal output plus a clean, read-only Claude, Codex, and OpenCode transcript with earlier-message paging.
-- Prompts and terminal keys, model switching, session management, Git review, and file transfers.
-- Claude Code and Codex question cards with the full question and selectable answers. Claude Code supports single choices, multiple selections, custom answers, and review before submission. Its folder trust screen shows the full folder path and safety warning with explicit **Exit** and **Trust** choices. **Other** accepts a custom answer; questions without choices show a typed-answer field. OpenCode questions use the visible terminal and keys.
+- A live terminal: the laptop pane's own screen, streamed to the phone. **Take control** to answer any agent's question, approval or menu with a key bar (arrows, Enter, Esc, Tab, digits, Ctrl+C) or typed text. It works for every agent, because the phone shows the agent's real interface.
+- Status, activity and alerts straight from Herdr: what each agent says it is doing, its progress, why it is blocked (approval, question, sign-in), and a notification when a turn finishes. Separate, read-only Claude and Codex history.
+- Prompts, session management, Git review, and file transfers.
 - Project file browsing and private, read-only text previews.
 - Local HTML previews: tap an HTML result link or an HTML file in Files/Results. Nearby styles, images, and scripts load through the paired laptop connection. See [HTML previews](docs/html-previews.md).
-- Claude and Codex usage for each account, and phone notifications that clear when you read the reply on the PC.
 - Per-device permissions, saved PCs, signed companion updates, and optional cloud push.
 
 Keep your PC awake and online, and update both the app and the companion for new controls.

@@ -41,14 +41,21 @@ test('self-hosted setup preserves explicit cloud push opt-out and existing sende
  const upgraded=await setupCompanion(['--portal','https://remote.example.com','--foreground','--no-pair'],deps);
  assert.deepEqual(upgraded.config.cloudPush,legacy);
 });
-test('setup starts a missing default session and verifies protocol before presenting QR',async t=>{
- const home=homeFixture(t),bin=path.join(home,'.local/bin');fs.mkdirSync(bin,{recursive:true});fs.writeFileSync(path.join(bin,'herdr'),'#!/bin/sh\n',{mode:0o755});const calls=[];
- await setupCompanion(['--portal','https://remote.example.com'],{home,configPath:path.join(home,'config.json'),detectSocket:async()=>path.join(home,'.config/herdr/herdr.sock'),checkSocket:async()=>false,checkPort:async()=>{},sessionOwner:()=>({kind:'manual'}),exec:(_command,args)=>calls.push(args),pair:async()=>calls.push(['pair']),verifyHerdr:async()=>calls.push(['verify']),fetchImpl:async()=>new Response(JSON.stringify({id:'new',relayToken:'relay',claimToken:'claim',url:'https://remote.example.com'}))});
- assert.ok(calls.some(c=>c.includes('--now')&&c.includes('herdr-remote-session.service')));assert.ok(calls.findIndex(c=>c[0]==='verify')<calls.findIndex(c=>c[0]==='pair'));
+test('setup starts a stopped Herdr core and verifies it before presenting QR; it never touches a TUI session',async t=>{
+ const home=homeFixture(t),bin=path.join(home,'.local/bin');fs.mkdirSync(bin,{recursive:true});fs.writeFileSync(path.join(bin,'herdr-core'),'#!/bin/sh\n',{mode:0o755});const calls=[];
+ await setupCompanion(['--portal','https://remote.example.com'],{home,configPath:path.join(home,'config.json'),detectSocket:async()=>'/run/core.sock',checkSocket:async()=>false,checkPort:async()=>{},
+  exec:(command,args)=>calls.push([command,...args]),pair:async()=>calls.push(['pair']),verifyHerdr:async socket=>calls.push(['verify',socket]),
+  fetchImpl:async()=>new Response(JSON.stringify({id:'new',relayToken:'relay',claimToken:'claim',url:'https://remote.example.com'}))});
+ const start=calls.findIndex(c=>c[0]===path.join(bin,'herdr-core')&&c[1]==='server'&&c[2]==='start');
+ assert.ok(start>=0);assert.ok(start<calls.findIndex(c=>c[0]==='verify'));assert.ok(calls.findIndex(c=>c[0]==='verify')<calls.findIndex(c=>c[0]==='pair'));
+ assert.deepEqual(calls.find(c=>c[0]==='verify'),['verify','/run/core.sock']);
+ assert.equal(calls.some(c=>c.some(v=>String(v).includes('herdr-remote-session'))),false);
 });
-test('protocol verification reports actionable incompatibility and retries only unavailable sessions',async()=>{
- await assert.rejects(verifyHerdrProtocol('/unused',{client:{call:async()=>({snapshot:{protocol:21}})}}),/requires protocol 22.*restart/);
- let count=0;await verifyHerdrProtocol('/unused',{client:{call:async()=>{if(count++===0)throw Object.assign(Error('starting'),{code:'herdr_offline'});return {snapshot:{protocol:22}};}},sleep:async()=>{}});assert.equal(count,2);
+test('core verification reports an unsupported core and retries only while it is starting',async()=>{
+ const info=(extra={})=>({generation:1,version:'0.1.17',methods:['terminal.list','terminal.get','terminal.attach','terminal.send','terminal.keys','terminal.interrupt','terminal.run','events.subscribe'],...extra});
+ await assert.rejects(verifyHerdrProtocol('/unused',{client:{call:async()=>info({generation:2})}}),/not supported.*generation 1/);
+ await assert.rejects(verifyHerdrProtocol('/unused',{client:{call:async()=>info({methods:['terminal.list']})}}),/missing terminal\.get/);
+ let count=0;await verifyHerdrProtocol('/unused',{client:{call:async()=>{if(count++===0)throw Object.assign(Error('starting'),{code:'herdr_offline'});return info();}},sleep:async()=>{}});assert.equal(count,2);
 });
 test('installer mocked execution copies source, locks dependencies, creates launcher and invokes setup',t=>{
  const home=homeFixture(t),bin=path.join(home,'mock-bin'),log=path.join(home,'calls');fs.mkdirSync(bin);
@@ -61,16 +68,16 @@ test('installer mocked execution copies source, locks dependencies, creates laun
  const calls=fs.readFileSync(log,'utf8');assert.match(calls,/systemctl --user show-environment/);assert.match(calls,/npm ci --omit=dev --ignore-scripts/);assert.match(calls,/cli.js setup --no-pair --portal https:\/\/selfhost\.example/);assert.ok(fs.existsSync(path.join(home,'.local/share/herdr-remote-companion/current/bridge/src/relay.js')));
  const launcher=fs.readFileSync(path.join(home,'.local/bin/herdr-remote'),'utf8');assert.ok(launcher.includes(path.join(home,'.local/bin')));assert.ok(launcher.includes(path.join(bin,'node')));
 });
-test('installer automatically installs missing runtime and Herdr with verified archive in mocked home',t=>{
+test('installer automatically installs missing runtime and the Herdr core with verified archive in mocked home',t=>{
  const home=homeFixture(t),bin=path.join(home,'mock-bin'),log=path.join(home,'calls'),release=path.join(home,'release'),archive='node-v22.99.0-linux-x64.tar.xz';fs.mkdirSync(bin);fs.mkdirSync(path.join(release,'node/bin'),{recursive:true});
  const script=(file,body)=>fs.writeFileSync(file,'#!/usr/bin/env bash\nset -eu\n'+body,{mode:0o755});
  script(path.join(bin,'systemctl'),'exit 0\n');script(path.join(bin,'node'),'exit 1\n');script(path.join(bin,'uname'),'if [ "$1" = -s ]; then echo Linux; else echo x86_64; fi\n');
  script(path.join(release,'node/bin/node'),'if [ "${1:-}" = -e ]; then exit 0; fi\nprintf "new-node %s\\n" "$*" >> "$MOCK_LOG"\n');script(path.join(release,'node/bin/npm'),'printf "new-npm %s\\n" "$*" >> "$MOCK_LOG"\n');script(path.join(release,'node/bin/npx'),'exit 0\n');
  assert.equal(spawnSync('tar',['-cJf',path.join(release,archive),'-C',release,'node']).status,0);
  const sum=spawnSync('sha256sum',[path.join(release,archive)],{encoding:'utf8'}).stdout.split(' ')[0];fs.writeFileSync(path.join(release,'SHASUMS256.txt'),`${sum}  ${archive}\n`);
- script(path.join(release,'herdr-install.sh'),'mkdir -p "$HERDR_INSTALL_DIR"\nprintf "#!/bin/sh\\necho herdr 0.9.0\\n" > "$HERDR_INSTALL_DIR/herdr"\nchmod +x "$HERDR_INSTALL_DIR/herdr"\nprintf "installed-herdr\\n" >> "$MOCK_LOG"\n');
- script(path.join(bin,'curl'),'url=""; out=""; while [ "$#" -gt 0 ]; do case "$1" in https://*) url="$1";; -o) shift; out="$1";; esac; shift; done\ncase "$url" in https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt) cp "$MOCK_RELEASE/SHASUMS256.txt" "$out";; https://nodejs.org/dist/latest-v22.x/node-*.tar.xz) cp "$MOCK_RELEASE/${url##*/}" "$out";; https://herdr.dev/install.sh) cp "$MOCK_RELEASE/herdr-install.sh" "$out";; *) exit 8;; esac\n');
- const result=spawnSync('bash',[path.resolve('../ops/install-companion.sh')],{encoding:'utf8',env:{...process.env,HOME:home,PATH:bin+':/usr/bin:/bin',MOCK_LOG:log,MOCK_RELEASE:release}});assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/OK/);const calls=fs.readFileSync(log,'utf8');assert.match(calls,/installed-herdr/);assert.match(calls,/new-npm ci --omit=dev --ignore-scripts/);assert.match(calls,/new-node .*cli.js setup/);assert.ok(fs.existsSync(path.join(home,'.local/bin/herdr')));
+ script(path.join(release,'herdr-core-install.sh'),'mkdir -p "$HC_INSTALL_DIR"\nprintf "#!/bin/sh\\necho hc 0.1.17\\n" > "$HC_INSTALL_DIR/herdr-core"\nchmod +x "$HC_INSTALL_DIR/herdr-core"\nprintf "installed-herdr-core\\n" >> "$MOCK_LOG"\n');
+ script(path.join(bin,'curl'),'url=""; out=""; while [ "$#" -gt 0 ]; do case "$1" in https://*) url="$1";; -o) shift; out="$1";; esac; shift; done\ncase "$url" in https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt) cp "$MOCK_RELEASE/SHASUMS256.txt" "$out";; https://nodejs.org/dist/latest-v22.x/node-*.tar.xz) cp "$MOCK_RELEASE/${url##*/}" "$out";; https://releases.herdr.dev/core/install.sh) cp "$MOCK_RELEASE/herdr-core-install.sh" "$out";; *) exit 8;; esac\n');
+ const result=spawnSync('bash',[path.resolve('../ops/install-companion.sh')],{encoding:'utf8',env:{...process.env,HOME:home,PATH:bin+':/usr/bin:/bin',MOCK_LOG:log,MOCK_RELEASE:release}});assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/OK/);const calls=fs.readFileSync(log,'utf8');assert.match(calls,/installed-herdr-core/);assert.match(calls,/new-npm ci --omit=dev --ignore-scripts/);assert.match(calls,/new-node .*cli.js setup/);assert.ok(fs.existsSync(path.join(home,'.local/bin/herdr-core')));
 });
 test('installer stops before installing when systemd user session is unavailable',t=>{
  const home=homeFixture(t),bin=path.join(home,'mock-bin');fs.mkdirSync(bin);fs.writeFileSync(path.join(bin,'systemctl'),'#!/bin/sh\nexit 1\n',{mode:0o755});

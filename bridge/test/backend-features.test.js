@@ -11,14 +11,14 @@ import {Store} from '../src/store.js';
 import {BridgeError} from '../src/herdr.js';
 import {reviewProject} from '../src/review.js';
 
-async function fixture(t, {herdr:override,statusEventsFactory,push}={}) {
+async function fixture(t, {herdr:override,push}={}) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-backend-')); const calls=[];
   const pane={pane_id:'w1:p1',terminal_id:'terminal-1',workspace_id:'w1',tab_id:'t1',cwd:dir,revision:1,agent_status:'working',agent:'codex',name:'agent'};
   const herdr=override||{call:async(method,params)=>{calls.push({method,params});
     if(method==='session.snapshot')return {snapshot:{protocol:22,workspaces:[{workspace_id:'w1',label:'Project'}],panes:[pane],agents:[pane]}};
     if(method==='pane.get')return {pane}; if(method==='pane.read')return {read:{text:'ok',revision:1,truncated:false}}; return {type:'ok'};
   }};
-  const app=createBridge({socketPath:'/unused',stateDir:path.join(dir,'state'),projects:[{id:'project',label:'Project',path:dir}],allowTerminalInput:true},{herdr,statusEventsFactory,push});
+  const app=createBridge({socketPath:'/unused',stateDir:path.join(dir,'state'),projects:[{id:'project',label:'Project',path:dir}],allowTerminalInput:true},{herdr,push});
   app.server.listen(0,'127.0.0.1'); await once(app.server,'listening'); const url=`http://127.0.0.1:${app.server.address().port}`;
   const credential=app.store.pair(app.store.pairCode(),'phone');
   const request=(route,method='GET',body,token=credential.token,headers={})=>fetch(url+route,{method,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...headers},...(body===undefined?{}:{body:JSON.stringify(body)})});
@@ -62,7 +62,7 @@ test('attachment listing and deletion refuse symlinked file paths without touchi
 
 test('diagnostics and review are authenticated and review is read only',async t=>{
   const f=await fixture(t); execFileSync('git',['init','-q'],{cwd:f.dir}); const diagnostics=await (await f.request('/v1/diagnostics')).json(); assert.equal(diagnostics.bridgeOnline,true); assert.equal(diagnostics.sessionResumeSupported,false);
-  assert.equal(diagnostics.nativeDecisions[0].bindingVerification,'unverified');
+  assert.equal(diagnostics.nativeDecisions[0].bindingVerification,null);
   assert.equal(diagnostics.nativeDecisions[0].status,'working');
   assert.ok(Number.isInteger(diagnostics.publication.publicationErrorCount));
   assert.ok(Number.isInteger(diagnostics.publication.push.queueDepth));
@@ -214,16 +214,12 @@ test('pane activity survives bridge restart without promoting unobserved or repl
   assert.equal((await restarted.snapshot()).panes[0].lastActivity,null);
 });
 
-test('observed status event dates the pane and retains that time across a bridge restart',async t=>{
-  let onStatus;
-  const f=await fixture(t,{statusEventsFactory:(_socket,handlers)=>{
-    onStatus=handlers.onStatus;
-    return {update:()=>{},close:()=>{}};
-  }});
+test('an observed status change dates the pane and retains that time across a bridge restart',async t=>{
+  const f=await fixture(t);
   f.pane.agent='opencode';
   assert.equal((await(await f.request('/v1/snapshot')).json()).panes[0].lastActivity,null);
+  // Herdr core events republish the session list; the status change itself dates the pane.
   f.pane.agent_status='done';
-  await onStatus({pane_id:f.pane.pane_id,agent_status:'done'});
   const updated=(await(await f.request('/v1/snapshot')).json()).panes[0];
   assert.equal(updated.status,'done');
   assert.ok(Number.isFinite(Date.parse(updated.lastActivity)));

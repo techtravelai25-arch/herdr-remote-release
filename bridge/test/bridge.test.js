@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import net from 'node:net';
 import http from 'node:http';
 import {once} from 'node:events';
 import {WebSocket} from 'ws';
@@ -12,7 +11,6 @@ import {Store} from '../src/store.js';
 import {setRemoteEnabled,setDeviceMode} from '../src/access.js';
 import {readJsonBody} from '../src/request-body.js';
 import {generateKeyPair, exportJWK, SignJWT} from 'jose';
-import {Herdr} from '../src/herdr.js';
 
 async function fixture(t,options={},dependencies={}) {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-remote-test-'));const calls=[];
@@ -375,11 +373,6 @@ test('WebSocket requires auth and reconnect sends fresh snapshot without control
  const bad=new WebSocket(f.url.replace('http','ws')+'/v1/events');bad.on('error',()=>{});const [response]=await once(bad,'unexpected-response').then(([req,res])=>[res]);assert.equal(response.statusCode,401);response.resume();bad.terminate();
  for(let i=0;i<2;i++){const ws=new WebSocket(f.url.replace('http','ws')+'/v1/events',{headers:{Authorization:`Bearer ${f.credential.token}`}});const [msg]=await once(ws,'message');assert.equal(JSON.parse(msg).type,'snapshot');const closed=once(ws,'close');ws.close();await closed;}
  assert.ok(f.calls.every(c=>['session.snapshot','pane.process_info'].includes(c.method)));
-});
-test('NDJSON transport handles fragmented responses and matches request id',async t=>{
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-socket-'));const socketPath=path.join(dir,'api.sock');
- const sockets=new Set();const server=net.createServer(socket=>{sockets.add(socket);socket.on('close',()=>sockets.delete(socket));socket.once('data',chunk=>{const req=JSON.parse(chunk.toString());socket.write(JSON.stringify({id:'other',result:{bad:true}})+'\n');const result=JSON.stringify({id:req.id,result:{type:'pong'}})+'\n';socket.write(result.slice(0,8));setTimeout(()=>socket.write(result.slice(8)),10);});});server.listen(socketPath);await once(server,'listening');
- t.after(async()=>{for(const s of sockets)s.destroy();await new Promise(resolve=>server.close(resolve));fs.rmSync(dir,{recursive:true,force:true});});assert.deepEqual(await new Herdr(socketPath).call('ping'),{type:'pong'});
 });
 test('restart creates replacement before closing and preserves agent kind',async t=>{
  const f=await fixture(t);const r=await f.request('/v1/panes/w1Y%3Ap1/restart','POST',{});assert.equal(r.status,200);assert.equal((await r.json()).paneId,'w1Y:p2');assert.deepEqual(f.calls.map(c=>c.method),['pane.get','agent.get','tab.create','pane.close','agent.start']);assert.equal(f.calls.at(-1).params.kind,'codex');

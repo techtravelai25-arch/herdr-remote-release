@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {resolveCodexSession} from './codex-session.js';
-import {readCodexLifecycle} from './codex-lifecycle.js';
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const verified=new Map();
@@ -116,14 +115,6 @@ export async function withClaudeSession(herdr,pane,home) {
     if(pane.agent==='claude'&&recordIdentity(readRecord(home,proc.pid))!==recordIdentity(initialRecord))
       return resultPane(pane,'unverified','process_record_changed_during_binding',generation);
   } catch { return resultPane(pane,'unverified','pane_recheck_unavailable',generation); }
-  if(pane.agent==='codex'&&resolution.state==='verified'&&resolution.reason==='recovered_title_native_row'&&
-    !(generationMatches&&prior?.sessionId===resolution.sessionId)) {
-    // A title can linger after an in-process thread switch. A native thread
-    // already known to be finished cannot establish a new PID-to-row binding.
-    const lifecycle=readCodexLifecycle(resolution.session,home);
-    if(lifecycle?.state==='complete'||lifecycle?.state==='aborted')
-      return resultPane(pane,'unverified','historical_title_only_session',generation);
-  }
   if(resolution.state==='verified') {
     const bound=resultPane(pane,'verified',resolution.reason,generation,resolution.session,resolution.sessionId);
     verified.set(key,{generation,session:resolution.session,sessionId:resolution.sessionId});

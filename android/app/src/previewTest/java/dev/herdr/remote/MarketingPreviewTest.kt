@@ -51,7 +51,6 @@ class MarketingPreviewTest {
     @Test fun codexConversationDark() {
         val state = storefrontState().copy(
             selectedId = "checkout",
-            currentModel = "gpt-5.4 high",
             snapshot = storefrontState().snapshot.copy(panes = storefrontState().snapshot.panes.map { pane ->
                 if (pane.id == "checkout") pane.copy(status = "done") else pane
             }),
@@ -70,13 +69,10 @@ class MarketingPreviewTest {
     @Test fun codexDecisionDark() {
         val state = storefrontState().copy(
             selectedId = "checkout",
-            currentModel = "gpt-5.4 high",
-            question = BridgeQuestion(
-                "q-storefront-pickup",
-                "How should pickup orders work without a shipping address?",
-                listOf("Allow pickup without one", "Require one for all orders", "Ask the customer", "Other"),
-                0,
-            ),
+            snapshot = storefrontState().snapshot.copy(panes = storefrontState().snapshot.panes.map { pane ->
+                if (pane.id == "checkout") pane.copy(status = "blocked", blockedKind = "question",
+                    activity = "How should pickup orders work without a shipping address?") else pane
+            }),
             output = CODEX_DECISION,
         )
         render("codex-decision-dark") {

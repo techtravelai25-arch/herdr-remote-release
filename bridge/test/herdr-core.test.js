@@ -5,10 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import {once} from 'node:events';
-import {HerdrCore,corePane} from '../src/herdr-core.js';
-import {createHerdrMux} from '../src/herdr-mux.js';
+import {HerdrCore,corePane,agentKind,displayKind} from '../src/herdr-core.js';
+import {createCoreEvents} from '../src/core-events.js';
 import {createBridge} from '../src/server.js';
-import {Timeline} from '../src/timeline.js';
+import {createPushMonitor} from '../src/push.js';
+import {Store} from '../src/store.js';
 
 const fixture=JSON.parse(fs.readFileSync(new URL('./fixtures/hc-paint.json',import.meta.url)));
 const paint=Buffer.from(fixture.paint,'base64');
@@ -127,69 +128,6 @@ test('agents start atomically in a new app terminal; agent.start is refused',asy
   await assert.rejects(f.core.call('pane.get',{pane_id:'w1:p1'}),{code:'pane_not_found'});
 });
 
-const fake=(name,snapshot,calls)=>({call:async(method,params)=>{
-  calls.push([name,method,params]);
-  if(method==='session.snapshot'){const value=typeof snapshot==='function'?snapshot():snapshot;if(value instanceof Error)throw value;return {snapshot:value};}
-  return {ok:name};
-}});
-const offline=()=>Object.assign(new Error('offline'),{code:'herdr_offline'});
-const tuiSnapshot={protocol:22,focused_pane_id:'w1:p1',workspaces:[{workspace_id:'w1',label:'TUI'}],tabs:[],panes:[{pane_id:'w1:p1'}],agents:[]};
-const coreSnapshot={protocol:22,focused_pane_id:null,workspaces:[{workspace_id:'hc:sp1',label:'App'}],tabs:[],panes:[{pane_id:'hc:t1'}],agents:[]};
-
-test('mux merges both backends, routes by prefix and strips launch hints for the TUI',async()=>{
-  const calls=[];const mux=createHerdrMux(fake('tui',tuiSnapshot,calls),fake('core',coreSnapshot,calls));
-  const {snapshot}=await mux.call('session.snapshot');
-  assert.deepEqual(snapshot.panes.map(p=>p.pane_id),['w1:p1','hc:t1']);assert.deepEqual(snapshot.stale_pane_ids,[]);
-  assert.equal(snapshot.focused_pane_id,'w1:p1');
-  assert.equal((await mux.call('pane.get',{pane_id:'hc:t1'})).ok,'core');
-  assert.equal((await mux.call('agent.prompt',{target:'w1:p1'})).ok,'tui');
-  await mux.call('tab.create',{workspace_id:'w1',agent_kind:'codex',agent_name:'x',cwd:'/'});
-  assert.deepEqual(calls.at(-1),['tui','tab.create',{workspace_id:'w1',cwd:'/'}]);
-  assert.equal((await mux.call('workspace.create',{cwd:'/'})).ok,'core');
-  assert.equal((await mux.call('ping')).ok,'tui');
-});
-
-test('mux keeps a failed backend as stale only if it had panes, and throws when both fail',async()=>{
-  const calls=[];let core=coreSnapshot;let tui=offline();
-  const mux=createHerdrMux(fake('tui',()=>tui,calls),fake('core',()=>core,calls));
-  let {snapshot}=await mux.call('session.snapshot');
-  assert.deepEqual(snapshot.panes.map(p=>p.pane_id),['hc:t1']);assert.deepEqual(snapshot.stale_pane_ids,[]);
-  core=Object.assign(new Error('timeout'),{code:'herdr_timeout'});tui=tuiSnapshot;
-  ({snapshot}=await mux.call('session.snapshot'));
-  assert.deepEqual(snapshot.panes.map(p=>p.pane_id),['w1:p1','hc:t1']);assert.deepEqual(snapshot.stale_pane_ids,['hc:t1']);
-  assert.equal((await mux.call('workspace.create',{cwd:'/'})).ok,'tui');
-  tui=offline();
-  await assert.rejects(mux.call('session.snapshot'),{code:'herdr_offline'});
-});
-
-test('stale panes are republished unchanged and hidden from push and timeline',async t=>{
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-stale-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
-  const observed=[];
-  const push={enabled:true,observe:data=>{observed.push(structuredClone(data));return data;},close:()=>{}};
-  const pane=(id,status)=>({pane_id:id,workspace_id:'w1',tab_id:'t1',cwd:'/tmp',revision:1,agent:'opencode',agent_status:status,terminal_title:id});
-  let raw={protocol:22,workspaces:[{workspace_id:'w1',label:'P'}],panes:[pane('w1:p1','working'),pane('hc:t1','working')],agents:[],stale_pane_ids:[]};
-  const app=createBridge({socketPath:'/unused',stateDir:dir,projects:[],activityTimeline:false},
-    {herdr:{call:async()=>({snapshot:structuredClone(raw)})},push,statusEventsFactory:()=>({update(){},close(){}})});
-  t.after(()=>app.close());
-  const first=await app.snapshot();
-  assert.equal(first.panesComplete,true);
-  raw={...raw,panes:[pane('w1:p1','done'),pane('hc:t1','done')],stale_pane_ids:['hc:t1']};
-  const second=await app.snapshot();
-  assert.equal(second.panesComplete,false);assert.deepEqual(second.stalePaneIds,['hc:t1']);
-  assert.deepEqual(second.panes.find(p=>p.id==='hc:t1'),first.panes.find(p=>p.id==='hc:t1'),'stale pane is the last published object');
-  assert.equal(second.panes.find(p=>p.id==='w1:p1').status,'done');
-  // The 1 s poll publishes: push must not see the stale pane, so its tracking cannot advance.
-  const deadline=Date.now()+3000;
-  while(!observed.some(s=>s.panesComplete===false)&&Date.now()<deadline)await new Promise(r=>setTimeout(r,20));
-  const incomplete=observed.find(s=>s.panesComplete===false);
-  assert.ok(incomplete,'an incomplete snapshot was published');
-  assert.deepEqual(incomplete.panes.map(p=>p.id),['w1:p1']);
-  const timeline=new Timeline({read:()=>[],write(){}});
-  timeline.observe({...first,panes:first.panes});
-  timeline.observe({...second,panes:second.panes.filter(p=>p.id!=='hc:t1')});
-  assert.equal(timeline.baseline.get('hc:t1'),'working','an incomplete snapshot keeps omitted baselines');
-});
-
 test('launcher waits for readiness instead of agent.start when the backend already started the agent',async t=>{
   const {createLauncher}=await import('../src/agent-launch.js');
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-launch-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
@@ -205,4 +143,121 @@ test('launcher waits for readiness instead of agent.start when the backend alrea
   assert.deepEqual(await launcher.start({path:dir,label:'P'},'claude','job'),{paneId:'hc:t9'});
   assert.deepEqual(calls[0],['workspace.create',{cwd:fs.realpathSync(dir),label:'P',focus:false,agent_kind:'claude',agent_name:'job'}]);
   assert.equal(calls.some(([method])=>method==='agent.start'),false);
+});
+
+const agentTerminal=(extra={})=>terminal('t1',{foreground:{pid:200,name:'claude',argv:['claude'],cwd:'/work'},
+  status:{app:'claude-code',state:'working'},...extra});
+
+test('status words are the agent\'s own; a finished turn is unseen until the Herdr app marks it seen',()=>{
+  const unseen=corePane(agentTerminal({status:{app:'claude-code',state:'done'},turn:3,labels:{'herdr.space':'sp1','herdr.seen':'2'}}),'c');
+  const seen=corePane(agentTerminal({status:{app:'claude-code',state:'idle'},turn:3,labels:{'herdr.space':'sp1','herdr.seen':'3'}}),'c');
+  const blocked=corePane(agentTerminal({status:{app:'claude-code',state:'blocked',kind:'permission',msg:'Allow rm -rf build?'}}),'c');
+  const busy=corePane(agentTerminal({status:{app:'claude-code',state:'working',msg:'Running tests',progress:40}}),'c');
+  assert.deepEqual([unseen.agent_status,seen.agent_status,blocked.agent_status,busy.agent_status],['done','idle','blocked','working']);
+  assert.deepEqual([blocked.blocked_kind,blocked.activity,busy.activity,busy.progress],['permission','Allow rm -rf build?','Running tests',40]);
+  assert.equal(corePane(agentTerminal({status:{app:'claude-code',state:'error'}}),'c').agent_status,'error');
+});
+
+test('control authority comes from the foreground process; a reported app name only labels the pane',()=>{
+  const reporter=terminal('t1',{foreground:{pid:300,name:'python3',argv:['python3','tool.py'],cwd:'/w'},status:{app:'pi',state:'working'}});
+  assert.equal(agentKind(reporter),null);
+  assert.equal(displayKind(reporter),'pi');
+  const pane=corePane(reporter,'c');
+  assert.equal(pane.agent,undefined);assert.equal(pane.display_kind,'pi');
+  const nodeCodex=terminal('t1',{foreground:{pid:301,name:'node',argv:['node','/usr/lib/node_modules/@openai/codex/bin/codex.js'],cwd:'/w'}});
+  assert.equal(agentKind(nodeCodex),'codex');
+  // A stale record from an exited program does not label the shell.
+  assert.equal(displayKind(terminal('t1',{status:{app:'pi',state:'idle'}})),null);
+});
+
+test('only a turn the bridge saw finish is eligible for an alert',()=>{
+  const t=agentTerminal({status:{app:'claude-code',state:'done'},turn:4});
+  assert.equal(corePane(t,'c',{turn:4,state:'done',baseline:true}).completionEligible,false);
+  const seen=corePane(t,'c',{turn:4,state:'done',baseline:false});
+  assert.deepEqual([seen.completionEligible,seen.nativeTurnId,seen.bindingVerification],[true,'4','verified']);
+  // An older finished turn stays the completion while a later turn runs.
+  const running=corePane(agentTerminal({turn:5}),'c',{turn:4,state:'done',baseline:false});
+  assert.deepEqual([running.agent_status,running.nativeTurnId,running.completionEligible],['working','4',true]);
+});
+
+/** A fake herdr-core event stream: answers the subscription, then lets the test push events. */
+async function fakeEvents(t,terminals) {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'hc-events-'));const socketPath=path.join(dir,'core.sock');
+  const sockets=[];
+  const server=net.createServer(socket=>{
+    sockets.push(socket);
+    let buffer='';
+    socket.on('data',chunk=>{buffer+=chunk;const end=buffer.indexOf('\n');if(end<0)return;const message=JSON.parse(buffer.slice(0,end));buffer='';
+      socket.write(JSON.stringify({jsonrpc:'2.0',id:message.id,result:{seq:1,terminals}})+'\n');});
+  });
+  server.listen(socketPath);await once(server,'listening');
+  t.after(()=>{for(const socket of sockets)socket.destroy();server.close();fs.rmSync(dir,{recursive:true,force:true});});
+  const send=params=>sockets.at(-1).write(JSON.stringify({jsonrpc:'2.0',method:'event',params})+'\n');
+  return {socketPath,send,sockets};
+}
+const until=async(predicate,ms=2000)=>{const end=Date.now()+ms;while(!predicate()&&Date.now()<end)await new Promise(r=>setTimeout(r,10));assert.ok(predicate());};
+
+test('core events: snapshot turns are a baseline, observed turn events are completions, removal forgets',async t=>{
+  const f=await fakeEvents(t,[{address:'t1',turn:2,status:{state:'done'}},{address:'t2',turn:0,status:{state:'working'}}]);
+  let changes=0;
+  const events=createCoreEvents(f.socketPath,{onChange:()=>changes++});t.after(()=>events.close());
+  await until(()=>events.healthy);
+  assert.deepEqual(events.completionFor('t1'),{turn:2,state:'done',baseline:true});
+  assert.equal(events.completionFor('t2'),null);
+  f.send({type:'turn',terminal:'t2',seq:2,data:{state:'blocked',turn:1}});
+  f.send({type:'turn',terminal:'t2',seq:3,data:{state:'done',turn:2}});
+  await until(()=>events.completionFor('t2')?.turn===2);
+  assert.deepEqual(events.completionFor('t2'),{turn:2,state:'done',baseline:false});
+  // A subscriber that fell behind gets a fresh snapshot; its gap is a baseline, known turns stay.
+  f.sockets.at(-1).write(JSON.stringify({jsonrpc:'2.0',method:'missed',params:{seq:9,terminals:[{address:'t2',turn:3,status:{state:'idle'}}]}})+'\n');
+  await until(()=>events.completionFor('t2')?.turn===3);
+  assert.equal(events.completionFor('t2').baseline,true);
+  assert.equal(events.completionFor('t1'),null);
+  f.send({type:'removed',terminal:'t2',seq:10,data:{}});
+  await until(()=>events.completionFor('t2')===null);
+  assert.ok(changes>=4);
+});
+
+test('core events reconnect after the core goes away and resubscribe',async t=>{
+  const f=await fakeEvents(t,[]);
+  const events=createCoreEvents(f.socketPath,{onChange:()=>{}});t.after(()=>events.close());
+  await until(()=>events.healthy);
+  f.sockets.at(-1).destroy();
+  await until(()=>!events.healthy);
+  await until(()=>events.healthy&&f.sockets.length===2,3000);
+});
+
+test('a finished turn alerts once, survives a bridge restart unacknowledged, and is acknowledged when seen on the desktop',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'herdr-alerts-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  let completion={turn:1,state:'done',baseline:true},state={app:'claude-code',state:'done'},turn=1,seen='0';
+  const raw=()=>({snapshot:{protocol:22,workspaces:[{workspace_id:'hc:sp1',label:'App'}],agents:[],
+    panes:[corePane(agentTerminal({status:state,turn,labels:{'herdr.space':'sp1','herdr.seen':seen}}),'core',completion)]}});
+  const open=()=>{
+    const store=new Store(path.join(dir,'state'));
+    const app=createBridge({socketPath:'/unused',stateDir:path.join(dir,'state'),projects:[],activityTimeline:false},
+      {herdr:{call:async()=>raw()},store,push:createPushMonitor({},store)});
+    return app;
+  };
+  const refreshed=app=>app.refresh();
+  let app=open();
+  // Baseline: the bridge did not see turn 1 finish.
+  let pane=(await refreshed(app)).panes[0];
+  assert.equal(pane.completionEventId??null,null);
+  // Turn 2 runs, then the bridge sees it finish (an hc turn event), while turn 3 already started.
+  state={app:'claude-code',state:'working'};turn=1;await refreshed(app);
+  completion={turn:2,state:'done',baseline:false};turn=2;state={app:'claude-code',state:'working'};
+  pane=(await refreshed(app)).panes[0];
+  assert.ok(pane.completionEventId,'completion alert created');
+  assert.equal(pane.completionAcknowledged,false);
+  const eventId=pane.completionEventId;
+  await app.close();
+  // The bridge restarts: the outstanding alert keeps its id and stays unacknowledged.
+  app=open();
+  pane=(await refreshed(app)).panes[0];
+  assert.equal(pane.completionEventId,eventId);assert.equal(pane.completionAcknowledged,false);
+  // Viewing turn 2 in the Herdr app acknowledges it.
+  state={app:'claude-code',state:'idle'};seen='2';
+  pane=(await refreshed(app)).panes[0];
+  assert.equal(pane.completionEventId,eventId);assert.equal(pane.completionAcknowledged,true);
+  await app.close();
 });

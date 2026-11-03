@@ -191,7 +191,8 @@ export function createPushMonitor(config,store,{fetcher=fetch,now=Date.now,inter
       present.add(pane.id);
       const previous=data.states[pane.id];
       const status=pane.status;
-      const versioned=(pane.kind==='codex'||pane.kind==='claude')&&(complete||pane.bindingGeneration!==undefined);
+      // Herdr reports every agent's own status and turns, so every agent pane uses the verified contract.
+      const versioned=complete||pane.bindingGeneration!==undefined;
       const generation=typeof pane.bindingGeneration==='string'||Number.isSafeInteger(pane.bindingGeneration)?String(pane.bindingGeneration):null;
       const turn=typeof pane.nativeTurnId==='string'&&pane.nativeTurnId.length>0&&pane.nativeTurnId.length<=256?pane.nativeTurnId:null;
       const verified=pane.bindingVerification==='verified'&&generation!==null;
@@ -225,9 +226,10 @@ export function createPushMonitor(config,store,{fetcher=fetch,now=Date.now,inter
       // blocked and needs_input describe the same outstanding attention.
       const sameAttention=kind&&kind===previousAttentionKind&&
         (prior?.status==='unknown'||attentionKind(prior?.status)===kind);
-      // Herdr's idle status means the result was seen in the focused PC pane.
-      // Reconcile persisted idle completions too, including after an upgrade.
-      if(prior&&(status==='working'||status==='idle'))acknowledgeState(next,pane.id,'completion');
+      // `idle` means the person viewed this turn in the Herdr app (its seen marker),
+      // which acknowledges the completion. A next turn starting does not: a queued
+      // prompt can start work before anyone has read the result.
+      if(prior&&(status==='idle'||(!versioned&&status==='working')))acknowledgeState(next,pane.id,'completion');
       if(prior&&(['working','idle','done'].includes(status)||
         (prior.status!==status&&(kind==='needs_input'||kind==='error')&&!sameAttention)))acknowledgeState(next,pane.id,'attention');
       if(versioned) {
@@ -237,8 +239,8 @@ export function createPushMonitor(config,store,{fetcher=fetch,now=Date.now,inter
             next.completedTurnKeys=[completionKey];
           }
           decision('baseline',pane);
-        } else if((status==='done'||status==='idle')&&prior.working&&completionKey&&
-          completionKey!==prior.completedTurnKey&&!next.completedTurnKeys.includes(completionKey)) {
+        } else if(completionKey&&completionKey!==prior.completedTurnKey&&!next.completedTurnKeys.includes(completionKey)) {
+          // A turn the bridge saw finish (Herdr turn event) alerts once, even if the next turn already started.
           const stableId=createHash('sha256').update(JSON.stringify([pane.id,generation,turn])).digest('hex');
           const emitted=event(pane.id,'done',null,stableId);
           next.completedTurnKey=completionKey;

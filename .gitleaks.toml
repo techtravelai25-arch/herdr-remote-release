@@ -9,3 +9,11 @@ condition = "AND"
 paths = ['''(^|/)android/app/src/test/resources/relay-interop-vector\.json$''']
 regexTarget = "secret"
 regexes = ['''^GhjCxIHq9\-li676XZ7hPvaPLCO\-Wq8j\-8gcc272pIsM$''']
+
+# Unmodified vendored xterm.js 6.0.0 (hash in THIRD_PARTY_NOTICES.md): minified identifiers, not secrets.
+[[allowlists]]
+description = "Minified xterm.js identifiers"
+condition = "AND"
+paths = ['''(^|/)android/app/src/main/assets/terminal/xterm\.js$''']
+regexTarget = "match"
+regexes = ['''^t\.(FourKeyMap|SequencerByKey)=''']

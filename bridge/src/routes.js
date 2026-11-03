@@ -8,7 +8,9 @@ import {readJsonBody as body} from './request-body.js';
 import {reject,text,respond,writeDownloadHead,onlyParams} from './http-util.js';
 
 const kinds=new Set(['codex','claude','opencode']);
-const queryRoutes=/^\/v1\/panes\/[^/]+\/(history|files|preview(?:\/[a-f0-9]{32})?)$/;
+const queryRoutes=/^\/v1\/panes\/[^/]+\/(history|files|stream|preview(?:\/[a-f0-9]{32})?)$/;
+// The live terminal has its own per-device limits so it never starves ordinary requests.
+const liveTerminal=/^\/v1\/panes\/[^/]+\/(stream|stream-input)$/;
 
 /**
  * The native HTTP API. `ctx` carries the bridge's shared services; pane-scoped
@@ -36,9 +38,8 @@ export function createRequestHandler(ctx) {
         projects:config.projects.map(project=>({id:project.id,label:project.label,available:projectAvailable(project)})),
         websocketSupported:true,sessionResumeSupported:false,checkedAt,error:s.error||null,
         publication:ctx.diagnostics(),nativeDecisions:s.panes.map(p=>({paneId:p.id,bindingGeneration:p.bindingGeneration,
-          bindingVerification:p.bindingVerification,bindingReason:p.bindingReason,rawStatus:p.rawStatus,status:p.status,
-          nativeTurnId:p.nativeTurnId,nativeCompletionKind:p.nativeCompletionKind,nativeReason:p.nativeReason,
-          completionEligible:p.completionEligible}))});
+          bindingVerification:p.bindingVerification,rawStatus:p.rawStatus,status:p.status,turn:p.turn,
+          nativeTurnId:p.nativeTurnId,completionEligible:p.completionEligible,blockedKind:p.blockedKind}))});
     }
     if(req.method==='GET'&&url.pathname==='/v1/attachments') return respond(res,200,attachments.list(device.deviceId));
     const attachmentContent=url.pathname.match(/^\/v1\/attachments\/([^/]+)\/content$/);
@@ -57,7 +58,7 @@ export function createRequestHandler(ctx) {
       if(config.allowHerdrStart!==true) reject('herdr_start_disabled','Starting Herdr is not enabled on this laptop.',403);
       const input=await body(req);
       if(Object.keys(input).length) reject('invalid_input','Herdr start does not accept commands or options.');
-      const result=await ctx.locked('herdr-start',()=>ensureHerdrRunning({herdr,startUnit:dependencies.startHerdrUnit}));
+      const result=await ctx.locked('herdr-start',()=>ensureHerdrRunning({herdr,...(dependencies.startHerdrUnit?{startUnit:dependencies.startHerdrUnit}:{})}));
       return respond(res,200,{ok:true,...result});
     }
     if(req.method==='GET' && (url.pathname==='/v1/app-update' || url.pathname==='/v1/app-update/apk')) {
@@ -109,7 +110,8 @@ export function createRequestHandler(ctx) {
         ctx.rate('pair',15); const b=await body(req); const deviceName=text(b.deviceName,80,'device name');
         return respond(res,200,store.pair(b.code,deviceName));
       }
-      const {device}=await ctx.auth(req); ctx.rate(device.deviceId,240);
+      const {device}=await ctx.auth(req);
+      if(!liveTerminal.test(url.pathname))ctx.rate(device.deviceId,240);
       if(req.method!=='GET') requireAccess(store,device,'write',config);
       await routes(req,res,url,device);
     } catch(e) {

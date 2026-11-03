@@ -81,10 +81,11 @@ test('relay reconnects with fresh socket and never replays requests',async t=>{
  Socket.sockets[0].emit('open');assert.equal(states.at(-1),true);Socket.sockets[0].emit('close');await new Promise(r=>setTimeout(r,1100));assert.equal(Socket.sockets.length,2);assert.equal(Socket.sockets[1].sent.length,0);relay.stop();const count=Socket.sockets.length;await new Promise(r=>setTimeout(r,1100));assert.equal(Socket.sockets.length,count);
 });
 
-test('socket discovery detects one live session and refuses ambiguous sessions',async t=>{
- const net=await import('node:net');const {detectHerdrSocket}=await import('../src/companion.js');const home=fs.mkdtempSync(path.join(os.tmpdir(),'companion-test-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
- const socket=path.join(home,'.config/herdr/sessions/one/herdr.sock');fs.mkdirSync(path.dirname(socket),{recursive:true});const server=net.createServer(c=>c.end());await new Promise(r=>server.listen(socket,r));t.after(()=>server.close());assert.equal(await detectHerdrSocket({home}),socket);
- const other=path.join(home,'.config/herdr/herdr.sock'),second=net.createServer(c=>c.end());await new Promise(r=>second.listen(other,r));t.after(()=>second.close());await assert.rejects(detectHerdrSocket({home}),/Several/);assert.equal(await detectHerdrSocket({home,explicit:socket}),socket);
+test('core socket discovery uses the standard herdr-core socket unless one is named explicitly',async()=>{
+ const {detectHerdrSocket}=await import('../src/companion.js');const {defaultCoreSocket}=await import('../src/herdr-core.js');
+ assert.equal(await detectHerdrSocket({explicit:undefined}),defaultCoreSocket());
+ assert.equal(await detectHerdrSocket({explicit:'/run/user/1/herdr-core/work.sock'}),'/run/user/1/herdr-core/work.sock');
+ await assert.rejects(detectHerdrSocket({explicit:'relative.sock'}),/absolute/);
 });
 
 

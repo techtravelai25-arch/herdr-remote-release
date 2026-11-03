@@ -420,18 +420,12 @@ class FeaturePreviewTest {
             }
         }
     }
-    @Test fun missionOfflineQuestion() {
-        val state = conversationState().copy(online = false, live = false,
-            question = BridgeQuestion("q-offline", "Proceed with the deployment?", listOf("Run the tests first", "Keep reviewing"), 0))
-        render("offline-question", ThemeMode.DARK, "Review checkout", tabs = true, reviewEnabled = false) {
-            AgentDetailContent(state, panes.first(), {}, { _, _ -> })
-        }
-    }
-    @Test fun missionQueuedQuestionRecovery() {
-        val state = conversationState().copy(question = null, deliveries = emptyMap(), outputTruncated = false,
-            output = "Review paused.\n\n• Queued follow-up inputs ? 1 question alt + ↑ to answer")
-        render("queued-question-recovery", ThemeMode.LIGHT, "Review checkout", tabs = true) {
-            AgentDetailContent(state, panes.first(), {}, { _, _ -> })
+    @Test fun missionNeedsApproval() {
+        // Herdr reports what the agent needs in its own words; the live terminal answers it.
+        val pane = panes.first().copy(status = "blocked", blockedKind = "permission", activity = "Allow npm test to write coverage files?")
+        val state = conversationState().copy(snapshot = conversationState().snapshot.copy(panes = listOf(pane) + panes.drop(1)))
+        render("needs-approval", ThemeMode.LIGHT, "Review checkout", tabs = true) {
+            AgentDetailContent(state, pane, {}, { _, _ -> })
         }
     }
     @Test fun missionTerminalReadOnly() {
@@ -477,54 +471,6 @@ class FeaturePreviewTest {
         }
     }
     @Test fun largeTextComposerReachable() = conversation(ThemeMode.LIGHT, scale = 2f, bottom = true, suffix = "-200percent-composer")
-    @Test fun questionLight() {
-        val state = conversationState().copy(question = BridgeQuestion("q-preview", "Which connection recovery should we test?", listOf("Reconnect", "Refresh session", "Check status", "Other"), 0))
-        render("question-light", ThemeMode.LIGHT, "Review checkout", tabs = true) {
-            AgentDetailContent(state, panes.first(), {}, { _, _ -> })
-        }
-    }
-    @Test fun questionDark() {
-        val state = conversationState().copy(question = BridgeQuestion("q-preview", "Which connection recovery should we test?", listOf("Reconnect", "Refresh session", "Check status", "Other"), 0))
-        render("question-dark", ThemeMode.DARK, "Review checkout", tabs = true) {
-            AgentDetailContent(state, panes.first(), {}, { _, _ -> })
-        }
-    }
-    @Test fun questionLargeText() {
-        val state = conversationState().copy(question = BridgeQuestion("q-preview", "Which connection recovery should we test?", listOf("Reconnect", "Refresh session", "Check status", "Other"), 0))
-        render("question-light-200percent", ThemeMode.LIGHT, "Review checkout", scale = 2f, tabs = true) {
-            AgentDetailContent(state, panes.first(), {}, { _, _ -> })
-        }
-    }
-    @Test fun questionOtherAnswerLight() {
-        val state = conversationState().copy(question = BridgeQuestion("q-other-preview", "Which connection recovery should we test?", listOf("Reconnect", "Refresh session", "Check status", "Other"), 3))
-        render("question-other-light", ThemeMode.LIGHT, "Review checkout", tabs = true) {
-            AgentDetailContent(state, panes.first(), {}, { _, _ -> })
-        }
-    }
-    @Test fun questionFreeTextLight() {
-        val state = conversationState().copy(question = BridgeQuestion("q-text-preview", "What should we test next?", emptyList(), freeText = true))
-        render("question-free-text-light", ThemeMode.LIGHT, "Review checkout", tabs = true) {
-            AgentDetailContent(state, panes.first(), {}, { _, _ -> })
-        }
-    }
-    @Test fun terminalQuestionRecoveryLight() {
-        val state = conversationState().copy(
-            question = null,
-            output = """
-                • Queued follow-up inputs ? 1 question alt + ↑ to answer
-                Which deletion is failing on the phone? I’ll check the saved-data path.
-                › 1. Clear saved history in Settings
-                2. Delete an uploaded file
-                3. Remove a saved session or connection
-                4. Other
-
-                enter submit  ctrl + ] skip  alt + ↓ main prompt
-            """.trimIndent(),
-        )
-        render("terminal-question-recovery-light", ThemeMode.LIGHT, "Review checkout", tabs = true) {
-            AgentDetailContent(state, panes.first(), {}, { _, _ -> })
-        }
-    }
     @Test fun searchSelectedCodeOccurrence() {
         val text = "Context before the code.\n\n```kotlin\nval first = \"needle\"\n" +
             (1..18).joinToString("\n") { "val row$it = $it" } +

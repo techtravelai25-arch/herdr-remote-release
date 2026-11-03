@@ -1,22 +1,13 @@
-import {execFile} from 'node:child_process';
 import {BridgeError} from './herdr.js';
 
-export function startHerdrUnit() {
-  return new Promise((resolve, reject) => {
-    execFile('systemctl', ['--user', 'start', 'herdr-remote-herdr.service'], {timeout: 5000, maxBuffer: 16384}, error => {
-      if (error) reject(new BridgeError('herdr_start_failed', 'Could not start the configured Herdr service. Check the laptop service configuration.', 503));
-      else resolve();
-    });
-  });
-}
-
-export async function ensureHerdrRunning({herdr, startUnit = startHerdrUnit, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now, timeoutMs = 15000}) {
+/** Start herdr-core only when its socket is missing or refused, then wait until it answers. */
+export async function ensureHerdrRunning({herdr, startUnit = () => herdr.call('server.start', {}, 15000), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now, timeoutMs = 15000}) {
   try {
     await herdr.call('ping', {}, 1000);
     return {alreadyRunning: true};
   } catch (error) {
     // Never restart or compete with a server that is reachable but busy or
-    // unresponsive. Only a missing/refused socket may start the fixed service.
+    // unresponsive. Only a missing/refused socket may start the core.
     if (error.code !== 'herdr_offline') throw error;
   }
   await startUnit();

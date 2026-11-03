@@ -1,4 +1,18 @@
-# Herdr Remote 0.8.48
+# Herdr Remote 0.9.1
+
+Android 0.9.1 (85) and laptop companion 0.9.1 (sequence 87). Update both the app and companion. The signed community APK updates 0.8.48 in place with the same certificate. Community 0.9.0 was not published; its changes are listed here.
+
+- **Herdr core only.** The companion now works with the Herdr desktop app and its core (herdr-core 0.1); the Herdr TUI is no longer supported. Open the Herdr app (or install herdr-core) on the laptop before updating. Setup starts the core if it is not running and no longer creates a Herdr TUI session unit. See [Herdr backend](herdr-app-backend.md).
+- **Live terminal.** A pane shows the laptop terminal as it is, live, on relayed and direct connections. **Take control** lets you type and use keys (Esc, Tab, arrows, Enter, Ctrl+C, digits) to answer the questions, approvals and menus of any agent. One phone controls a pane at a time; another can take over after confirming. The terminal is rendered with bundled xterm.js 6.0.0 (MIT).
+- **Status from Herdr.** Working, done, blocked (permission, question or sign-in), the activity line and progress come from what each agent reports to Herdr. Completion alerts follow Herdr's finished turns, so agent updates no longer break them; a turn viewed in the Herdr app counts as seen.
+- **Removed:** the Claude and Codex question cards, the Codex and agent model menus and the composer model button (use the live terminal instead), and the per-agent screen and log readers behind them. Conversation history still reads Claude and Codex transcripts.
+- `ops/setup.py` no longer generates a Herdr TUI service or a `socketPath`; `--socket` now names a non-default Herdr core socket (`coreSocketPath`).
+
+The default community APK uses QR pairing with optional cloud endpoints disabled. See [validation and limits](release-validation.md).
+
+Download [herdr-remote.apk](https://github.com/techtravelai25-arch/herdr-remote-release/releases/latest/download/herdr-remote.apk) and follow [laptop setup](setup.md). Android 8.0+ is required.
+
+## Herdr Remote 0.8.48
 
 Android 0.8.48 (83) and laptop companion 0.8.48 (sequence 85). Update both the app and companion. The signed community APK updates 0.8.46 in place with the same certificate.
 

@@ -1,6 +1,6 @@
 # Set up your laptop
 
-Use Linux, Node.js 22+, Python 3, Herdr 0.9.0 (protocol22), and optionally cloudflared. Install Herdr from its official upstream instructions and authenticate your coding agents locally. Start a normal Herdr session first.
+Use Linux, Node.js 22+, Python 3, the Herdr core (herdr-core 0.1, the backend of the Herdr desktop app), and optionally cloudflared. The Herdr TUI is no longer supported. Install the Herdr app, or only herdr-core, from its official upstream instructions and authenticate your coding agents locally. Open the Herdr app or run `herdr-core server start` first.
 
 Download the source from this repository or clone it with Git, then enter the checkout:
 
@@ -11,7 +11,7 @@ npm ci --prefix bridge
 python3 ops/setup.py --output /tmp/herdr-remote-setup
 ```
 
-Inspect the generated config, launcher, and systemd user units. The generator detects executable paths. Override them with `--node`, `--herdr`, or `--cloudflared`; set `--socket` if your Herdr socket is not `~/.config/herdr/herdr.sock`.
+Inspect the generated config, launcher, and systemd user units. The generator detects executable paths. Override them with `--node` or `--cloudflared`; set `--socket` only if your Herdr core socket is not `$XDG_RUNTIME_DIR/herdr-core/default.sock`.
 
 When satisfied, install the same configuration:
 
@@ -46,7 +46,7 @@ herdr-remote revoke DEVICE_ID
 
 Browse selects any existing folder within the bridge user's Home directory, including Home itself. Symlinks escaping Home are rejected. Recent stores twelve successfully used Home folders. To allow a project outside Home, add an explicit `id`, `label`, and absolute `path` to local `projects` configuration.
 
-`allowTerminalInput` and `allowHerdrStart` default to false. The latter permits the app to start the generated Herdr service and must only be enabled if its socket/session agrees with your configuration. Starting a new agent runs the fixed supported agent executable; Home browsing does not confine the agent's OS permissions.
+`allowTerminalInput` and `allowHerdrStart` default to false. The latter permits the app to start the Herdr core with `herdr-core server start` when it is not running. Starting a new agent runs the fixed supported agent executable; Home browsing does not confine the agent's OS permissions.
 
 ## Upgrade and uninstall
 

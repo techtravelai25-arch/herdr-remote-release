@@ -11,14 +11,18 @@ The implementations in this repository were written for this project's
 Node bridge, native Android client and Cloudflare service. No upstream
 application implementation files are bundled or copied into this release.
 
-The unmodified `discovery/herdr-api-schema.json` is from Herdr v0.9.0,
-maintained by the Herdr project and contributors, and is licensed under
-Apache-2.0. Its SHA-256 is
-5fb46b13fdaf39c88cf699b9806685868c7ee6b0142523d84391b1606416dc0a.
-See https://github.com/herdrdev/herdr/tree/v0.9.0 and
-licenses/Apache-2.0.txt. The Gradle wrapper is also Apache-2.0 licensed.
+The unmodified `discovery/herdr-core-schema.json` is the output of
+`herdr-core schema` from hc (herdr-core) 0.1.17, maintained by the Herdr
+project and contributors, and is licensed under Apache-2.0. Its SHA-256 is
+9bc36202da4a5a12877b619c376b173fa3682ff9aedd4d410d1fab0dae13ff83.
+See licenses/Apache-2.0.txt. The Gradle wrapper is also Apache-2.0 licensed.
+
+The Android app bundles xterm.js 6.0.0 and its stylesheet, unmodified,
+under the MIT License (Copyright (c) 2012-2019 Christopher Jeffrey,
+SourceLair Private Company and the xterm.js authors); its licence is in
+android/app/src/main/assets/terminal/xterm-LICENSE.txt.
 
 Third-party dependencies retain their respective licences. Dependency
 versions and integrity hashes are recorded in the npm lockfiles and Gradle
-configuration. Herdr and Node.js downloaded by the optional Linux installer
+configuration. Herdr core and Node.js downloaded by the optional Linux installer
 are separate upstream distributions under their respective licences.

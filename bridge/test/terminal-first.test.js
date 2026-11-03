@@ -45,7 +45,7 @@ test('arbitrary vendor layouts remain passive text snapshots with the same contr
     f.setScreen(screen);
     const output=await attached(f);
     assert.equal(output.source,'recent_unwrapped');assert.ok(output.attachmentId);
-    assert.equal(output.currentModel,null);assert.equal(output.question,undefined);assert.equal(output.agentModelMenu,undefined);
+    assert.equal(output.currentModel,null);assert.equal(output.question,null);assert.equal(output.agentModelMenu,null);
     assert.match(output.text,screen.includes('script')?/<script>alert\(1\)<\/script>/:screen.includes('Clipboard')?/Clipboard escape/:/old footer/);
     assert.equal(output.text.includes('\u001b'),false);
   }
@@ -101,24 +101,18 @@ test('lost write acknowledgment stays uncertain across a bridge restart and cann
   const fresh=await attached(f);assert.notEqual(fresh.attachmentId,output.attachmentId);
 });
 
-test('prompt uses agent.prompt only and unavailable native questions stay inert',async t=>{
+test('prompt uses agent.prompt only and the removed question routes are gone',async t=>{
   const f=await fixture(t); const output=await attached(f);
   assert.equal((await f.request(route('w1:p1')+'/prompt','POST',{attachmentId:output.attachmentId,text:'task',operationId:'semantic-prompt-001'})).status,200);
   assert.deepEqual(f.calls.filter(call=>call.method==='agent.prompt').map(call=>call.params),[{target:'w1:p1',text:'task'}]);
-  assert.equal((await f.request(route('w1:p1')+'/answer','POST',
-    {attachmentId:output.attachmentId,questionId:'a'.repeat(64),option:0,operationId:'no-question-001'})).status,409);
+  // Questions are answered in the live terminal; the parsed-question routes no longer exist.
+  for(const action of ['answer','question-review'])assert.equal((await f.request(route('w1:p1')+'/'+action,'POST',
+    {attachmentId:output.attachmentId,questionId:'a'.repeat(64),option:0,operationId:'no-question-001'})).status,404);
   assert.equal(f.calls.some(call=>call.method==='pane.send_keys'||call.method==='pane.send_input'),false);
 });
-test('model actions require a fresh pane attachment before any native menu work',async t=>{
-  const f=await fixture(t);
-  assert.equal((await f.request(route('w1:p1')+'/model','POST',{})).status,409);
-  const output=await attached(f);
-  for(const [action,body] of [['model-select',{attachmentId:output.attachmentId,menuId:'a'.repeat(64),option:0}],['model-cancel',{attachmentId:output.attachmentId,menuId:'a'.repeat(64)}],['model-key',{attachmentId:output.attachmentId,menuId:'a'.repeat(64),key:'down'}]]) {
-    const response=await f.request(route('w1:p1')+'/'+action,'POST',body);
-    assert.equal(response.status,409);assert.equal((await response.json()).error.code,'model_stale');
-  }
-  // A codex pane with no recognized native picker stays unavailable, not broken.
-  const opening=await f.request(route('w1:p1')+'/model','POST',{attachmentId:output.attachmentId,operationId:'semantic-model-001'});
-  assert.equal(opening.status,409);assert.equal((await opening.json()).error.code,'model_unavailable');
+test('the removed model-picker routes are gone and never touch the pane',async t=>{
+  const f=await fixture(t); const output=await attached(f);
+  for(const action of ['model','model-select','model-cancel','model-key'])
+    assert.equal((await f.request(route('w1:p1')+'/'+action,'POST',{attachmentId:output.attachmentId,operationId:'model-gone-'+action})).status,404);
   assert.equal(f.calls.some(call=>call.method==='pane.send_input'||call.method==='pane.send_keys'),false);
 });

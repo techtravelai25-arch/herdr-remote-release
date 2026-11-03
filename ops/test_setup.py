@@ -20,11 +20,12 @@ class SetupTests(unittest.TestCase):
             binary.write_text('#!/bin/sh\nprintf "%s\\n" "$HERDR_REMOTE_CONFIG" "$@"\n')
             binary.chmod(0o700)
             env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / '.config'))
-            command = ['python3', str(root / 'ops/setup.py'), '--install', '--node', str(binary), '--herdr', str(binary)]
+            command = ['python3', str(root / 'ops/setup.py'), '--install', '--node', str(binary)]
             result = subprocess.run(command, env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             config = home / '.config/herdr-remote/config.json'
-            self.assertEqual(json.loads(config.read_text())['socketPath'], str(home / '.config/herdr/herdr.sock'))
+            self.assertNotIn('coreSocketPath', json.loads(config.read_text()))
+            self.assertFalse((home / '.config/systemd/user/herdr-remote-herdr.service').exists())
             unit = (home / '.config/systemd/user/herdr-remote-bridge.service').read_text()
             self.assertIn('WorkingDirectory="' + str(root).replace('%', '%%').replace('"','\\"') + '/bridge"', unit)
             self.assertIn('bin spaces $$dollar %%percent', unit)

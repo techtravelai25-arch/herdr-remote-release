@@ -10,9 +10,9 @@ The Android inventory below identifies its evidence and scope separately. This d
 
 ## Herdr schema provenance
 
-`discovery/herdr-api-schema.json` is byte-for-byte identical to [Herdr v0.9.0's schema](https://github.com/herdrdev/herdr/blob/v0.9.0/docs/next/api/herdr-api.schema.json). SHA-256: `5fb46b13fdaf39c88cf699b9806685868c7ee6b0142523d84391b1606416dc0a`. It is unmodified. The tag's [Cargo.toml](https://github.com/herdrdev/herdr/blob/v0.9.0/Cargo.toml) declares `Apache-2.0`; its [LICENSE](https://github.com/herdrdev/herdr/blob/v0.9.0/LICENSE) contains Apache License 2.0. The upstream tag has no root NOTICE file. Older forks and different releases may use different licenses; this attribution is specific to v0.9.0.
+`discovery/herdr-core-schema.json` is the unmodified output of `herdr-core schema` from hc (herdr-core) 0.1.17, maintained by the Herdr project and contributors under Apache License 2.0. SHA-256: `9bc36202da4a5a12877b619c376b173fa3682ff9aedd4d410d1fab0dae13ff83`. This attribution is specific to hc 0.1.17.
 
-The separately installed Herdr executable is not included in this repository. The Gradle wrapper also uses Apache License 2.0; its original file headers remain intact.
+The separately installed Herdr app and herdr-core executables are not included in this repository. The Gradle wrapper also uses Apache License 2.0; its original file headers remain intact.
 
 ## Node production dependencies
 
@@ -972,6 +972,34 @@ LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES
 OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
 WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
 ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
+
+## Android bundled web assets
+
+The live terminal page in `android/app/src/main/assets/terminal/` bundles `xterm.js` and `xterm.css` from [@xterm/xterm 6.0.0](https://www.npmjs.com/package/@xterm/xterm/v/6.0.0) (`lib/xterm.js`, `css/xterm.css`), unmodified. The npm tarball matches the registry integrity `sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==`. SHA-256: `xterm.js` `14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972`, `xterm.css` `854a7c0fb70e8b1a083c16797ab827299fb18744f5ad34f227b48337e33293c6`. License: MIT, from the package's `LICENSE`, also shipped as `xterm-LICENSE.txt`:
+
+```text
+Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
+Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
+Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ```
 
 ## Android resolved runtime inventory

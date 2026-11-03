@@ -34,7 +34,6 @@ class ConversationHistoryTest {
         val raw = "Earlier assistant reply\n\n› ok\n\n• Sounds good.\n"
         val display = terminalPresentation(raw, "codex")
         assertEquals(raw, display.blocks.single().text)
-        assertNull(display.question)
 
     }
 

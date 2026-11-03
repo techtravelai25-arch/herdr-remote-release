@@ -27,10 +27,11 @@ if ! command -v node >/dev/null || ! node -e 'if(Number(process.versions.node.sp
   hash -r
 fi
 command -v npm >/dev/null || { printf 'npm is required alongside Node.\n' >&2; exit 1; }
-if ! command -v herdr >/dev/null; then
-  curl --proto '=https' --tlsv1.2 -fsSL --retry 3 https://herdr.dev/install.sh -o "$installer_tmp/herdr-install.sh"
-  # The official installer verifies each binary against its HTTPS release manifest SHA-256.
-  HERDR_INSTALL_DIR="$HOME/.local/bin" sh "$installer_tmp/herdr-install.sh"
+# Herdr Remote drives the Herdr core (herdr-core, the Herdr app's backend). Install it when missing.
+if ! command -v herdr-core >/dev/null && [ ! -x "$HOME/.local/bin/herdr-core" ]; then
+  curl --proto '=https' --tlsv1.2 -fsSL --retry 3 https://releases.herdr.dev/core/install.sh -o "$installer_tmp/herdr-core-install.sh"
+  # The official installer checks the download against the SHA-256 in its HTTPS release manifest.
+  HC_INSTALL_DIR="$HOME/.local/bin" sh "$installer_tmp/herdr-core-install.sh"
 fi
 companion_config="${HERDR_REMOTE_CONFIG:-$HOME/.config/herdr-remote/config.json}"
 # Recover an interrupted switch before preparing another release.

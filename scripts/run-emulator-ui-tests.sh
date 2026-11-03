@@ -27,7 +27,8 @@ if (( api_level >= 33 )); then
     "$adb_tool" -s "$serial" shell pm grant dev.herdr.remote.community.debug android.permission.POST_NOTIFICATIONS
 fi
 mkdir -p "$(dirname -- "$log_file")"
-"$adb_tool" -s "$serial" shell am instrument -w -r \
+# HERDR_UI_TEST_CLASS=dev.herdr.remote.SomeTest runs one class while developing; releases run all.
+"$adb_tool" -s "$serial" shell am instrument -w -r ${HERDR_UI_TEST_CLASS:+-e class "$HERDR_UI_TEST_CLASS"} \
     dev.herdr.remote.community.debug.test/androidx.test.runner.AndroidJUnitRunner > "$log_file"
 python3 - "$log_file" <<'VERIFY'
 from pathlib import Path

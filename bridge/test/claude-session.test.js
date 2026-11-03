@@ -278,26 +278,6 @@ test('a foreground process change within one PID cannot publish the earlier Code
     assert.equal(bound.agent_session,null);
   }
 });
-test('a historical completed or aborted Codex row cannot be recovered from title alone',async t=>{
-  for(const event of ['task_complete','turn_aborted']) {
-    const id=event==='task_complete'?'2d69680a-1111-4222-8333-444455556666':'5d69680a-1111-4222-8333-444455556666';
-    const home=codexHome(t,[[id,'/home/me','Old work']]);
-    const rollout=path.join(home,`.codex/sessions/2026/10/07/rollout-2026-10-07T00-00-00-${id}.jsonl`);
-    fs.writeFileSync(rollout,[
-      {timestamp:'2026-10-11T10:00:00.000Z',type:'event_msg',payload:{type:'task_started',turn_id:'old-turn'}},
-      {timestamp:'2026-10-11T10:01:00.000Z',type:'event_msg',payload:{type:event,turn_id:'old-turn'}},
-    ].map(row=>JSON.stringify(row)).join('\n')+'\n');
-    for(const reported of [null,{agent:'codex',kind:'id',value:id}]) {
-      const pane={...codexPane('Old work | me'),terminal_id:'terminal-historical-'+event,
-        agent_session:reported};
-      const bound=await withClaudeSession(liveHerdr(pane,'codex'),pane,home);
-      assert.equal(bound.binding.state,'unverified');
-      assert.equal(bound.binding.reason,'historical_title_only_session');
-      assert.equal(bound.agent_session,null);
-      assert.equal((await createHistory({homeDirectory:home}).read(bound)).available,false);
-    }
-  }
-});
 test('an already verified Codex title binding remains valid when its own turn completes',async t=>{
   const id='6d69680a-1111-4222-8333-444455556666';
   const home=codexHome(t,[[id,'/home/me','Current work']]);

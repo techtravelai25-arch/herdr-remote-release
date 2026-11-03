@@ -14,7 +14,13 @@ export const defaultCoreSocket=()=>path.join(process.env.XDG_RUNTIME_DIR||`/run/
 
 const AGENT_COMMANDS={claude:'claude',codex:'codex',opencode:'opencode'};
 const AGENT_ENV={TERM:'xterm-256color',TERM_PROGRAM:'ghostty',COLORTERM:'truecolor'};
-const STATUS={idle:'idle',working:'working',done:'done',blocked:'blocked'};
+// Coding-agent executables whose foreground process may receive prompts and agent-level input.
+const AGENT_PROCESSES=new Set(['claude','codex','opencode','pi','gemini','cursor-agent','copilot','amp','droid','kimi',
+  'kiro','grok','qwen','goose','crush','aider','cline','hermes','kilo','letta','qodercli','devin','omp','muse','maki','mastracode','agy']);
+const INTERPRETERS=new Set(['node','bun','deno','python','python3']);
+const SHELLS=new Set(['sh','bash','zsh','dash','fish','ksh','tcsh','csh','nu','elvish','pwsh','xonsh']);
+const DISPLAY_APPS={'claude-code':'claude',claude:'claude',codex:'codex',opencode:'opencode'};
+const STATES=new Set(['idle','working','done','blocked','error']);
 const ERROR_CODES={not_found:'pane_not_found',finished:'pane_not_found',blocked:'agent_blocked',busy:'agent_busy',timeout:'herdr_timeout'};
 const MAX_FRAME=4*1024*1024;
 // hc 0.1.x repaint contract: one frame that starts with CAN + DECSTR and ends,
@@ -31,33 +37,63 @@ function processStart(pid) {
   try {const stat=fs.readFileSync(`/proc/${pid}/stat`,'utf8');return stat.slice(stat.lastIndexOf(')')+2).split(' ')[19]||'?';}
   catch {return '?';}
 }
+const executable=value=>typeof value==='string'?path.basename(value):'';
+/** The agent allowed to receive agent-level input: decided only by the foreground process, never by reported status. */
 export function agentKind(terminal) {
   const fg=terminal.foreground;
-  const named=fg?.name==='claude'?'claude':AGENT_COMMANDS[fg?.name]??null;
-  if(named)return named;
-  // A status record can outlive its agent; trust it only while a child of the shell is in front.
-  if(!fg||fg.pid===terminal.pid)return null;
-  const app=terminal.status?.app;
-  return app==='claude-code'||app==='claude'?'claude':AGENT_COMMANDS[app]??null;
+  if(!fg)return null;
+  let name=fg.name;
+  if(INTERPRETERS.has(name))name=executable(fg.argv?.[1]).replace(/\.(?:m?js|py)$/,'');
+  else if(!AGENT_PROCESSES.has(name))name=executable(fg.argv?.[0]);
+  return AGENT_PROCESSES.has(name)?name:null;
+}
+/** What to call the pane: a trusted agent, else what a non-shell foreground program reports about itself. */
+export function displayKind(terminal) {
+  const agent=agentKind(terminal);
+  if(agent)return agent;
+  const fg=terminal.foreground,app=terminal.status?.app;
+  // A status record can outlive its program; ignore it while a shell is in front.
+  if(!fg||SHELLS.has(fg.name)||typeof app!=='string')return null;
+  if(DISPLAY_APPS[app])return DISPLAY_APPS[app];
+  return /^[a-z0-9][a-z0-9-]{0,31}$/.test(app)?app:null;
 }
 function spaceName(where) {
   if(typeof where!=='string'||!where)return 'Herdr app';
   const split=where.lastIndexOf(' / ');
   return split>0?where.slice(0,split):where;
 }
-const visible=t=>t?.state==='live'&&typeof t.labels?.['herdr.space']==='string'&&!String(t.address).includes('/');
+// Panes the Herdr app shows (a space label). The release canary's own hidden terminals carry
+// `herdr-remote.canary` instead, so the bridge sees them while the app does not.
+const visible=t=>t?.state==='live'&&(typeof t.labels?.['herdr.space']==='string'||t.labels?.['herdr-remote.canary']==='1')&&!String(t.address).includes('/');
 
-export function corePane(t,coreId) {
-  const agent=agentKind(t);
+/**
+ * One app pane in the bridge's pane shape. Status words are the program's own
+ * (OSC 7501). `herdr.seen` is the last turn the person viewed in the desktop app,
+ * so a finished turn above it is unseen (`done`) and at or below it is seen (`idle`).
+ */
+export function corePane(t,coreId,completion=null) {
+  const agent=agentKind(t),display=displayKind(t);
   const fg=t.foreground;
-  const space=t.labels['herdr.space'],tab=t.labels['herdr.tab']||space;
+  const space=t.labels['herdr.space']??'canary',tab=t.labels['herdr.tab']||space;
   // A new agent process or a recovered shell gives a new identity (PID + start time).
-  const agentPid=agent&&fg?fg.pid:0;
+  const agentPid=display&&fg&&fg.pid!==t.pid?fg.pid:0;
   const terminal_id=`${coreId}/${t.address}/${t.pid}:${processStart(t.pid)}/${agentPid}:${agentPid?processStart(agentPid):0}`;
+  const state=STATES.has(t.status?.state)?t.status.state:null;
+  const turn=Number.isSafeInteger(t.turn)?t.turn:0;
+  const seen=Number.parseInt(t.labels['herdr.seen'],10);
+  let status='unknown';
+  if(display&&state)status=state==='done'||state==='idle'?(Number.isSafeInteger(seen)&&seen>=turn?'idle':'done'):state;
+  const finished=display&&completion&&completion.turn<=turn?completion:null;
+  const text=value=>typeof value==='string'&&value.trim()?value.trim().slice(0,160):null;
   return {pane_id:CORE_PREFIX+t.address,terminal_id,workspace_id:CORE_PREFIX+space,tab_id:CORE_PREFIX+tab,focused:false,
     cwd:t.cwd,foreground_cwd:fg?.cwd||t.cwd,terminal_title:t.title||'',terminal_title_stripped:t.title||'',
-    ...(agent?{agent}:{}),agent_status:agent?STATUS[t.status?.state]??'unknown':'unknown',
-    revision:Number.isSafeInteger(t.turn)?t.turn:0,
+    ...(agent?{agent}:{}),...(display?{display_kind:display}:{}),agent_status:status,revision:turn,turn,
+    activity:display?text(t.status?.msg):null,
+    progress:display&&Number.isInteger(t.status?.progress)&&t.status.progress>=0&&t.status.progress<=100?t.status.progress:null,
+    blocked_kind:display&&state==='blocked'&&['permission','question','auth'].includes(t.status?.kind)?t.status.kind:null,
+    // Alert contract: the occupant is the binding; a turn the bridge saw finish is a completion.
+    bindingVerification:display?'verified':null,bindingGeneration:display?terminal_id:null,
+    nativeTurnId:finished?String(finished.turn):null,completionEligible:Boolean(finished&&!finished.baseline),
     ...(t.labels['herdr-remote.title']?{label:t.labels['herdr-remote.title']}:{})};
 }
 
@@ -97,12 +133,12 @@ export function serializeLine(line,cols,ansi) {
 function connect(socketPath,timeout) {
   return new Promise((resolve,reject)=>{
     const socket=net.createConnection(socketPath);
-    let buffer=Buffer.alloc(0),framed=false,id=0,closed=false,failure=null;
-    const pending=new Map(),channels=new Map();
+    let buffer=Buffer.alloc(0),framed=false,id=0,closed=false,failure=null,onClosed=null;
+    const pending=new Map(),channels=new Map(),listeners=new Map();
     const fail=error=>{
       if(closed)return;closed=true;failure=error;clearTimeout(timer);socket.destroy();
       for(const {reject:rejectCall} of pending.values())rejectCall(error);pending.clear();
-      reject(error);
+      reject(error);onClosed?.(error);
     };
     const timer=setTimeout(()=>fail(new BridgeError('herdr_timeout','The Herdr app core did not respond. Refresh before retrying an action; it may have completed.',504)),timeout);
     const frame=(channel,type,payload)=>{
@@ -128,6 +164,10 @@ function connect(socketPath,timeout) {
       async frame(params) {const result=await client.rpc('hello',{framed:true,...params});framed=true;return result;},
       send:frame,
       channel(number) {if(!channels.has(number))channels.set(number,[]);return channels.get(number);},
+      /** Deliver this channel's frames to a callback, starting with any already queued. */
+      listen(number,callback) {listeners.set(number,callback);for(const frame of client.channel(number).splice(0))callback(frame);},
+      /** A long-lived stream: no session deadline; `callback` runs once when the core goes away. */
+      persist(callback) {clearTimeout(timer);onClosed=callback;},
       close() {if(!closed){closed=true;clearTimeout(timer);socket.destroy();}},
     };
     socket.on('connect',()=>resolve(client));
@@ -151,12 +191,19 @@ function connect(socketPath,timeout) {
         if(buffer.length<9+length)return;
         const payload=buffer.subarray(9,9+length);buffer=buffer.subarray(9+length);
         if(channel===0&&type===0) {try{settle(JSON.parse(payload));}catch{return fail(new BridgeError('invalid_response','Invalid Herdr app core response.',502));}}
+        else if(listeners.has(channel))listeners.get(channel)({type,payload:Buffer.from(payload)});
         else client.channel(channel).push({type,payload:Buffer.from(payload)});
       }
     });
   });
 }
 
+/** Start the user's herdr-core if it is not running; it keeps running on its own afterwards. */
+function startCore(timeout=15000) {
+  const binary=process.env.HERDR_CORE_BIN||path.join(os.homedir(),'.local/bin/herdr-core');
+  return new Promise((resolve,reject)=>execFile(binary,['server','start'],{timeout,maxBuffer:64*1024},error=>
+    error?reject(new BridgeError('herdr_start_failed','Could not start Herdr on the laptop. Open the Herdr app there.',503)):resolve({started:true})));
+}
 function runApp(args,timeout=10000) {
   const binary=process.env.HERDR_APP_BIN||path.join(os.homedir(),'.local/bin/herdr-app');
   return new Promise((resolve,reject)=>execFile(binary,args,{timeout,maxBuffer:256*1024},(error,stdout)=>{
@@ -171,7 +218,10 @@ function runApp(args,timeout=10000) {
  * Herdr protocol-22 methods the bridge uses, in protocol-22 shapes.
  */
 export class HerdrCore {
-  constructor(socketPath=defaultCoreSocket(),{app=runApp}={}) {this.socketPath=socketPath;this.app=app;}
+  constructor(socketPath=defaultCoreSocket(),{app=runApp,events=null,start=startCore}={}) {
+    this.socketPath=socketPath;this.app=app;this.events=events;this.start=start;
+  }
+  pane(t,coreId) {return corePane(t,coreId,this.events?.completionFor(t.address)??null);}
   async session(timeout,work) {
     const client=await connect(this.socketPath,timeout);
     try{return await work(client);}finally{client.close();}
@@ -217,15 +267,19 @@ export class HerdrCore {
           complete&&=trim(screen)===trim(String(plain).split('\n'));
         }
         while(lines.length&&!lines.at(-1).replace(/\x1b\[[\d;]*m/g,''))lines.pop();
-        return {lines,complete,pane:corePane(after,coreId)};
+        return {lines,complete,pane:this.pane(after,coreId)};
       } finally {term.dispose();}
     });
   }
   /** Raw bytes typed as if by a person, through a short attach at the terminal's own size. */
-  async write(id,text,timeout) {
+  async write(id,text,timeout,{terminalId=null}={}) {
     return this.session(timeout,async client=>{
+      const coreId=await this.coreId(client);
       await client.frame();
       const t=await this.terminal(client,id);
+      // A control session belongs to one occupant; never type into its replacement.
+      if(terminalId&&this.pane(t,coreId).terminal_id!==terminalId)
+        throw new BridgeError('pane_changed','The program in this pane changed. Take control again.',409);
       const {channel}=await client.rpc('terminal.attach',{terminal:t.address,cols:t.cols,rows:t.rows,observe:false,history:0});
       const credit=Buffer.alloc(4);credit.writeUInt32LE(248);client.send(channel,1,credit);
       client.send(channel,0,Buffer.from(text,'utf8'));
@@ -233,17 +287,52 @@ export class HerdrCore {
       return {ok:true};
     });
   }
+  /**
+   * A live, observe-only view of one pane: hc's complete initial paint, then
+   * contiguous VT bytes. Credit is granted per consumed KiB. hc sends a resize
+   * frame (type 3: u16 cols, u16 rows) before every complete repaint, including
+   * the first; a size change calls onResize and the bytes after it are a fresh
+   * paint. An unknown frame or a lost core ends the stream.
+   */
+  async observe(id,{onData,onResize=()=>{},onEnd}) {
+    const client=await connect(this.socketPath,15000);
+    try {
+      const coreId=await this.coreId(client);
+      await client.frame();
+      const t=await this.terminal(client,id);
+      const pane=this.pane(t,coreId);
+      const {channel}=await client.rpc('terminal.attach',{terminal:t.address,cols:t.cols,rows:t.rows,observe:true,history:0,resize_notifications:true});
+      let ended=false,consumed=0,cols=t.cols,rows=t.rows;
+      const end=reason=>{if(ended)return;ended=true;client.close();onEnd(reason);};
+      const credit=kib=>{const grant=Buffer.alloc(4);grant.writeUInt32LE(kib);client.send(channel,1,grant);};
+      credit(248);
+      client.persist(()=>end('core_lost'));
+      client.listen(channel,frame=>{
+        if(ended)return;
+        if(frame.type===3&&frame.payload.length>=4) {
+          const nextCols=frame.payload.readUInt16LE(0),nextRows=frame.payload.readUInt16LE(2);
+          if(nextCols!==cols||nextRows!==rows){cols=nextCols;rows=nextRows;onResize(cols,rows);}
+          return;
+        }
+        if(frame.type!==0){end('unknown_frame');return;}
+        consumed+=frame.payload.length;
+        if(consumed>=16*1024){credit(Math.floor(consumed/1024));consumed%=1024;}
+        onData(frame.payload);
+      });
+      return {cols:t.cols,rows:t.rows,terminalId:pane.terminal_id,close:()=>end('closed')};
+    } catch(error) {client.close();throw error;}
+  }
   async snapshot(timeout) {
     return this.session(timeout,async client=>{
       const coreId=await this.coreId(client);
       const {terminals=[]}=await client.rpc('terminal.list',{});
       const live=terminals.filter(visible);
-      const panes=live.map(t=>corePane(t,coreId));
+      const panes=live.map(t=>this.pane(t,coreId));
       const workspaces=new Map(),tabs=new Map();
       for(const t of live) {
-        const space=CORE_PREFIX+t.labels['herdr.space'];
+        const space=CORE_PREFIX+(t.labels['herdr.space']??'canary');
         if(!workspaces.has(space))workspaces.set(space,{workspace_id:space,label:spaceName(t.labels.where)});
-        const tab=CORE_PREFIX+(t.labels['herdr.tab']||t.labels['herdr.space']);
+        const tab=CORE_PREFIX+(t.labels['herdr.tab']||t.labels['herdr.space']||'canary');
         if(!tabs.has(tab))tabs.set(tab,{tab_id:tab,workspace_id:space});
       }
       const agents=live.filter(t=>t.labels['herdr-remote.name']).map(t=>({pane_id:CORE_PREFIX+t.address,name:t.labels['herdr-remote.name']}));
@@ -270,8 +359,9 @@ export class HerdrCore {
   async call(method,params={},timeout=8000) {
     switch(method) {
     case 'ping':return this.session(timeout,async client=>({pong:true,core:await this.coreId(client)}));
+    case 'core.info':return this.session(timeout,client=>client.rpc('hello',{}));
     case 'session.snapshot':return {snapshot:await this.snapshot(timeout)};
-    case 'pane.get':return this.session(timeout,async client=>({type:'pane_info',pane:corePane(await this.terminal(client,params.pane_id),await this.coreId(client))}));
+    case 'pane.get':return this.session(timeout,async client=>({type:'pane_info',pane:this.pane(await this.terminal(client,params.pane_id),await this.coreId(client))}));
     case 'pane.process_info':return this.session(timeout,async client=>{
       const t=await this.terminal(client,params.pane_id),fg=t.foreground;
       return {process_info:{pane_id:params.pane_id,shell_pid:t.pid,foreground_process_group_id:fg?.pid??null,
@@ -286,13 +376,16 @@ export class HerdrCore {
       return {read:{pane_id:params.pane_id,workspace_id:pane.workspace_id,tab_id:pane.tab_id,source:params.source,format:params.format,
         text:rows.slice(-lines).join('\n'),revision:pane.revision,truncated:!complete||rows.length>lines}};
     }
-    case 'pane.send_text':return this.write(params.pane_id,String(params.text??''),timeout);
+    case 'pane.send_text':return this.write(params.pane_id,String(params.text??''),timeout,{terminalId:params.terminal_id??null});
     case 'pane.send_input': {
       if(params.text)await this.write(params.pane_id,String(params.text).replace(/\r?\n/g,'\r'),timeout);
       if(Array.isArray(params.keys)&&params.keys.length)return this.call('pane.send_keys',{pane_id:params.pane_id,keys:params.keys},timeout);
       return {ok:true};
     }
     // hc holds input while a person is typing at the desktop, then delivers it.
+    // hc presses the program's own stop key (esc for status-reporting agents, else ctrl+c).
+    case 'pane.interrupt':return this.session(Math.max(timeout,15000),client=>client.rpc('terminal.interrupt',{terminal:address(params.pane_id)}));
+    case 'server.start':return this.start(timeout);
     case 'pane.send_keys':return this.session(Math.max(timeout,15000),client=>client.rpc('terminal.keys',{terminal:address(params.pane_id),keys:params.keys}));
     case 'agent.prompt':return this.session(Math.max(timeout,15000),async client=>{
       const t=await this.terminal(client,params.target);
@@ -301,7 +394,7 @@ export class HerdrCore {
     });
     case 'agent.get':return this.session(timeout,async client=>{
       const t=await this.terminal(client,params.target);
-      const pane=corePane(t,await this.coreId(client));
+      const pane=this.pane(t,await this.coreId(client));
       if(!pane.agent)throw new BridgeError('agent_not_found',`agent target ${params.target} not found`,409);
       return {agent:{pane_id:pane.pane_id,terminal_id:pane.terminal_id,name:t.labels['herdr-remote.name']??null,kind:pane.agent,
         agent_status:pane.agent_status,interactive_ready:['idle','done'].includes(pane.agent_status)}};

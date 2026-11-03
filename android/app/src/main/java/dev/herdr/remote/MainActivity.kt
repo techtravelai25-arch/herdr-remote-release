@@ -532,10 +532,7 @@ internal fun activityLabel(value: String?): String = value?.let { runCatching { 
                     onBrowseFiles = { fileMessage = null; model.clearMessage(); showingFiles = true; model.loadProjectFiles() },
                     onCheckDelivery = model::checkDelivery,
                     onAcknowledgeDelivery = model::acknowledgeDelivery,
-                    onChangeModel = model::openAgentModelMenu,
-                    onReviewQuestion = model::reviewQuestion,
-                    onAnswerQuestion = { option, text -> state.question?.id?.let { model.answerQuestion(it, option, text) } },
-                    onCancelQuestion = { state.question?.id?.let { model.cancelQuestion(it) } },
+                    liveBridge = model::liveBridge,
                     onOpenHistory = { detailTab = 1; if (state.online) model.loadHistory() },
                     onEarlierHistory = { model.loadHistory(true) })
             }
@@ -558,14 +555,6 @@ internal fun activityLabel(value: String?): String = value?.let { runCatching { 
     previewError?.let { message -> AlertDialog(onDismissRequest = { previewError = null },
         title = { Text("Page unavailable") }, text = { Text(message) },
         confirmButton = { TextButton(onClick = { previewError = null }) { Text("Close") } }) }
-    state.agentModelMenu?.takeIf { detailTab == 0 && pane != null }?.let { menu ->
-        val enabled = canChangeAgentModel(state, pane) && pane?.let { state.deliveries[it.id]?.isUnresolved() } != true
-        CodexModelDialog(menu, enabled, state.busy,
-            onSelect = { model.selectAgentModel(menu.id, it) },
-            onCancel = { if (enabled) model.cancelAgentModelMenu(menu.id) else model.dismissAgentModelMenuLocally() },
-            onDismiss = { if (enabled) model.cancelAgentModelMenu(menu.id) else model.dismissAgentModelMenuLocally() },
-            onKey = { model.agentModelKey(menu.id, it) })
-    }
 }
 
 private data class HtmlPreviewRequest(val source: HtmlPreviewSource, val target: String?, val artifactId: String?)
@@ -652,8 +641,7 @@ private data class HtmlPreviewRequest(val source: HtmlPreviewSource, val target:
         onPrompt = { onPrompt(it) {} }, onKey = onKey, onRefresh = onRefresh,
         onAttach = onAttach, onRemoveAttachment = onRemoveAttachment,
         onManageAttachments = onManageAttachments, onBrowseFiles = onBrowseFiles,
-        onCheckDelivery = onCheckDelivery,
-        onAnswerQuestion = { option, text -> state.question?.id?.let { onAnswerQuestion(it, option, text) } })
+        onCheckDelivery = onCheckDelivery)
 }
 
 @Composable internal fun OperationReceipt(delivery: DeliveryState, enabled: Boolean, onCheck: () -> Unit) {

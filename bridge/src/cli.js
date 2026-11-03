@@ -31,7 +31,7 @@ function readConfig() {
   }
   config.stateDir = path.resolve(path.dirname(configPath), config.stateDir || '.state');
   if (
-    !path.isAbsolute(config.socketPath || '') ||
+    (config.coreSocketPath !== undefined && !path.isAbsolute(config.coreSocketPath)) ||
     !Array.isArray(config.projects) ||
     config.projects.some(project => typeof project.id !== 'string' || typeof project.label !== 'string' || !path.isAbsolute(project.path || '')) ||
     new Set(config.projects.map(project => project.id)).size !== config.projects.length

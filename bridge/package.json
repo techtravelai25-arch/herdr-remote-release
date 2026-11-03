@@ -9,7 +9,6 @@
   "scripts": {
     "start": "node src/cli.js serve",
     "test": "node --test",
-    "test:claude-herdr": "node fixtures/claude-question-herdr.mjs",
     "pair": "node src/cli.js pair",
     "devices": "node src/cli.js devices"
   },

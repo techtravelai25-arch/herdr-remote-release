@@ -1,6 +1,6 @@
 # Set up the laptop companion
 
-Herdr Remote requires a running Herdr 0.9.0 session with protocol 22, Node.js 22 or newer, and an HTTPS address that reaches the bridge on your laptop. The phone and bridge support direct QR pairing without an account or portal. The bridge listens only on loopback; put it behind a named HTTPS tunnel or reverse proxy that you control. The bridge also shows Herdr desktop app sessions from the app core socket (`$XDG_RUNTIME_DIR/herdr-core/default.sock`, or `coreSocketPath` in the config); see [Herdr desktop app backend](herdr-app-backend.md).
+Herdr Remote requires the Herdr core (herdr-core 0.1, the backend of the Herdr desktop app), Node.js 22 or newer, and an HTTPS address that reaches the bridge on your laptop. The Herdr TUI is no longer supported. The phone and bridge support direct QR pairing without an account or portal. The bridge listens only on loopback; put it behind a named HTTPS tunnel or reverse proxy that you control. The bridge uses the core socket `$XDG_RUNTIME_DIR/herdr-core/default.sock`, or `coreSocketPath` in the config for another core session; see [Herdr backend](herdr-app-backend.md).
 
 ## Direct HTTPS pairing
 
@@ -14,7 +14,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now herdr-remote-bridge.service
 ```
 
-Review the preview before `--install`. The setup script does not overwrite an existing config or start services. Edit `~/.config/herdr-remote/config.json` to set your Herdr socket and project paths, then restart the bridge if you changed it. Keep its state directory private. Start or attach to your Herdr session yourself.
+Review the preview before `--install`. The setup script does not overwrite an existing config or start services. Edit `~/.config/herdr-remote/config.json` to set your project paths (and `coreSocketPath` only for a non-default core session), then restart the bridge if you changed it. Keep its state directory private. Open the Herdr app, or run `herdr-core server start`, yourself.
 
 Point your HTTPS tunnel or proxy at `http://127.0.0.1:8787`. Do not publish the plain HTTP port. When the HTTPS endpoint is ready, run:
 

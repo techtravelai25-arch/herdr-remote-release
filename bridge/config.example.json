@@ -1,7 +1,6 @@
 {
   "port": 8787,
   "publicUrl": "",
-  "socketPath": "/home/YOUR_USER/.config/herdr/herdr.sock",
   "stateDir": ".state",
   "projects": [],
   "allowTerminalInput": false,
